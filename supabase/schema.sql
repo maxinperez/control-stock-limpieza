@@ -1,0 +1,227 @@
+-- Control de Stock · esquema de base de datos (Supabase / Postgres)
+-- Ejecutar completo en: Supabase > SQL Editor > New query > Run
+
+create extension if not exists pgcrypto;
+
+-- ============ TABLAS ============
+
+create table public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  nombre text not null default '',
+  rol text not null default 'contador' check (rol in ('admin','contador')),
+  activo boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- Copia de los productos del sistema principal (se actualiza importando la planilla)
+create table public.productos (
+  id uuid primary key default gen_random_uuid(),
+  codigo text not null unique,          -- clave de enlace con el sistema principal
+  barcode text,
+  nombre text not null,
+  unidad text not null default 'un',    -- un, lt, kg, etc.
+  categoria text,
+  costo numeric(14,2),
+  stock_actual numeric(14,3) not null default 0,  -- stock "base" de la app
+  stock_minimo numeric(14,3) not null default 0,
+  stock_ideal numeric(14,3),
+  activo boolean not null default true,
+  origen text not null default 'importado' check (origen in ('importado','alta_rapida')),
+  created_at timestamptz not null default now()
+);
+create index productos_barcode_idx on public.productos(barcode);
+
+create table public.conteos (
+  id uuid primary key default gen_random_uuid(),
+  nombre text not null,
+  estado text not null default 'abierto' check (estado in ('abierto','cerrado')),
+  creado_por uuid references auth.users(id),
+  created_at timestamptz not null default now(),
+  cerrado_at timestamptz
+);
+-- Solo puede haber un conteo abierto a la vez
+create unique index conteos_un_abierto on public.conteos(estado) where estado = 'abierto';
+
+-- Foto del stock de cada producto al iniciar el conteo
+create table public.conteo_base (
+  conteo_id uuid not null references public.conteos(id) on delete cascade,
+  producto_id uuid not null references public.productos(id),
+  stock_sistema numeric(14,3) not null default 0,
+  primary key (conteo_id, producto_id)
+);
+
+-- Cada carga es un registro que SUMA (o resta si es corrección). El id lo genera
+-- el cliente, por eso reenviar una carga offline nunca se duplica.
+create table public.conteo_movimientos (
+  id uuid primary key,
+  conteo_id uuid not null references public.conteos(id) on delete cascade,
+  producto_id uuid not null references public.productos(id),
+  cantidad numeric(14,3) not null,
+  usuario_id uuid not null references auth.users(id),
+  nota text,
+  created_at timestamptz not null default now()
+);
+create index mov_conteo_prod_idx on public.conteo_movimientos(conteo_id, producto_id);
+
+-- ============ VISTA RESUMEN ============
+
+create view public.conteo_resumen with (security_invoker = true) as
+select
+  b.conteo_id,
+  p.id as producto_id,
+  p.codigo, p.barcode, p.nombre, p.unidad, p.categoria, p.costo,
+  p.stock_minimo, p.stock_ideal,
+  b.stock_sistema,
+  coalesce(sum(m.cantidad), 0) as contado,
+  count(m.id) as movimientos,
+  coalesce(sum(m.cantidad), 0) - b.stock_sistema as diferencia,
+  max(m.created_at) as ultimo_mov
+from public.conteo_base b
+join public.productos p on p.id = b.producto_id
+left join public.conteo_movimientos m
+  on m.conteo_id = b.conteo_id and m.producto_id = b.producto_id
+group by b.conteo_id, p.id, b.stock_sistema;
+
+-- ============ SEGURIDAD (RLS) ============
+
+create function public.is_active() returns boolean
+language sql security definer stable set search_path = public as $$
+  select exists (select 1 from profiles where id = auth.uid() and activo)
+$$;
+
+create function public.is_admin() returns boolean
+language sql security definer stable set search_path = public as $$
+  select exists (select 1 from profiles where id = auth.uid() and activo and rol = 'admin')
+$$;
+
+alter table public.profiles enable row level security;
+alter table public.productos enable row level security;
+alter table public.conteos enable row level security;
+alter table public.conteo_base enable row level security;
+alter table public.conteo_movimientos enable row level security;
+
+create policy profiles_select on public.profiles for select
+  using (id = auth.uid() or public.is_admin());
+create policy profiles_update on public.profiles for update
+  using (public.is_admin()) with check (public.is_admin());
+
+create policy productos_select on public.productos for select using (public.is_active());
+create policy productos_insert on public.productos for insert with check (public.is_admin());
+create policy productos_update on public.productos for update
+  using (public.is_admin()) with check (public.is_admin());
+
+create policy conteos_select on public.conteos for select using (public.is_active());
+
+create policy base_select on public.conteo_base for select using (public.is_active());
+
+create policy mov_select on public.conteo_movimientos for select using (public.is_active());
+create policy mov_insert on public.conteo_movimientos for insert with check (
+  usuario_id = auth.uid()
+  and public.is_active()
+  and exists (select 1 from public.conteos c where c.id = conteo_id and c.estado = 'abierto')
+);
+
+-- ============ FUNCIONES (RPC) ============
+
+-- El primer usuario que se crea queda como admin; el resto como contador.
+-- (El rol real se asigna luego desde la función create-user, nunca desde el cliente.)
+create function public.handle_new_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into profiles (id, nombre, rol)
+  values (
+    new.id,
+    coalesce(split_part(new.email, '@', 1), ''),
+    case when exists (select 1 from profiles) then 'contador' else 'admin' end
+  );
+  return new;
+end $$;
+
+create trigger on_auth_user_created after insert on auth.users
+for each row execute function public.handle_new_user();
+
+create function public.iniciar_conteo(p_nombre text) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  if not is_admin() then raise exception 'Solo el administrador puede iniciar un conteo'; end if;
+  insert into conteos (nombre, creado_por) values (p_nombre, auth.uid()) returning id into v_id;
+  insert into conteo_base (conteo_id, producto_id, stock_sistema)
+    select v_id, id, stock_actual from productos where activo;
+  return v_id;
+end $$;
+
+create function public.alta_rapida(
+  p_conteo uuid, p_nombre text, p_unidad text, p_codigo text, p_barcode text
+) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  if not is_active() then raise exception 'Usuario no autorizado'; end if;
+  if not exists (select 1 from conteos where id = p_conteo and estado = 'abierto') then
+    raise exception 'El conteo no está abierto';
+  end if;
+  insert into productos (codigo, barcode, nombre, unidad, stock_actual, origen)
+  values (
+    coalesce(nullif(trim(p_codigo), ''), 'NUEVO-' || substr(gen_random_uuid()::text, 1, 6)),
+    nullif(trim(p_barcode), ''), trim(p_nombre), coalesce(nullif(trim(p_unidad), ''), 'un'),
+    0, 'alta_rapida'
+  ) returning id into v_id;
+  insert into conteo_base (conteo_id, producto_id, stock_sistema) values (p_conteo, v_id, 0);
+  return v_id;
+end $$;
+
+-- Cierra el conteo: lo contado pasa a ser el nuevo stock base de la app.
+create function public.cerrar_conteo(p_conteo uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_admin() then raise exception 'Solo el administrador puede cerrar un conteo'; end if;
+  update productos p set stock_actual = s.total
+  from (select producto_id, sum(cantidad) as total
+        from conteo_movimientos where conteo_id = p_conteo group by producto_id) s
+  where p.id = s.producto_id;
+  update conteos set estado = 'cerrado', cerrado_at = now()
+  where id = p_conteo and estado = 'abierto';
+end $$;
+
+-- Importación masiva de productos desde la planilla (solo admin)
+create function public.importar_productos(p_rows jsonb) returns integer
+language plpgsql security definer set search_path = public as $$
+declare n integer;
+begin
+  if not is_admin() then raise exception 'Solo el administrador puede importar'; end if;
+  if exists (select 1 from conteos where estado = 'abierto') then
+    raise exception 'Hay un conteo abierto: cerralo antes de importar';
+  end if;
+  insert into productos (codigo, barcode, nombre, unidad, categoria, costo, stock_actual, stock_minimo, stock_ideal)
+  select r->>'codigo', r->>'barcode', r->>'nombre',
+         coalesce(r->>'unidad', 'un'), r->>'categoria',
+         (r->>'costo')::numeric, coalesce((r->>'stock')::numeric, 0),
+         coalesce((r->>'stock_minimo')::numeric, 0), (r->>'stock_ideal')::numeric
+  from jsonb_array_elements(p_rows) r
+  on conflict (codigo) do update set
+    nombre = excluded.nombre,
+    barcode = coalesce(excluded.barcode, productos.barcode),
+    unidad = excluded.unidad,
+    categoria = coalesce(excluded.categoria, productos.categoria),
+    costo = coalesce(excluded.costo, productos.costo),
+    stock_actual = excluded.stock_actual,
+    -- mínimo/ideal: solo se pisan si la planilla los trae
+    stock_minimo = case when p_rows->0 ? 'stock_minimo' then excluded.stock_minimo else productos.stock_minimo end,
+    stock_ideal = case when p_rows->0 ? 'stock_ideal' then excluded.stock_ideal else productos.stock_ideal end,
+    activo = true;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+revoke execute on all functions in schema public from public, anon;
+revoke execute on function public.handle_new_user() from authenticated;
+grant execute on function public.is_active() to authenticated;
+grant execute on function public.is_admin() to authenticated;
+grant execute on function public.iniciar_conteo(text) to authenticated;
+grant execute on function public.alta_rapida(uuid, text, text, text, text) to authenticated;
+grant execute on function public.cerrar_conteo(uuid) to authenticated;
+grant execute on function public.importar_productos(jsonb) to authenticated;
+
+-- Actualización en vivo entre los distintos usuarios
+alter publication supabase_realtime add table public.conteo_movimientos;

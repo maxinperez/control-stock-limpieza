@@ -1,0 +1,134 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import * as XLSX from 'xlsx'
+import { supabase } from '../supabase'
+
+const num = (v) => (v == null ? 0 : Number(v))
+const fmt = (v) => (Number.isInteger(num(v)) ? String(num(v)) : num(v).toFixed(2))
+const money = (v) => num(v).toLocaleString('es-AR', { maximumFractionDigits: 0 })
+
+export default function Reportes() {
+  const [conteos, setConteos] = useState([])
+  const [id, setId] = useState('')
+  const [rows, setRows] = useState([])
+  const [vista, setVista] = useState('dif')
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    supabase.from('conteos').select('*').order('created_at', { ascending: false }).then(({ data }) => {
+      setConteos(data ?? [])
+      if (data?.length) setId(data[0].id)
+    })
+  }, [])
+
+  const load = useCallback(async () => {
+    if (!id) return
+    const { data } = await supabase.from('conteo_resumen').select('*').eq('conteo_id', id).order('nombre').range(0, 4999)
+    setRows((data ?? []).map((r) => ({ ...r, contado: num(r.contado), stock_sistema: num(r.stock_sistema), diferencia: num(r.diferencia), movimientos: num(r.movimientos) })))
+  }, [id])
+  useEffect(() => { load() }, [load])
+
+  const conteo = conteos.find((c) => c.id === id)
+  const contados = useMemo(() => rows.filter((r) => r.movimientos > 0), [rows])
+  const sinContar = useMemo(() => rows.filter((r) => r.movimientos === 0), [rows])
+  const difs = useMemo(
+    () => contados.filter((r) => r.diferencia !== 0)
+      .sort((a, b) => Math.abs(b.diferencia * (b.costo ?? 1)) - Math.abs(a.diferencia * (a.costo ?? 1))),
+    [contados],
+  )
+  const reponer = useMemo(() => rows
+    .map((r) => {
+      const base = r.movimientos > 0 ? r.contado : r.stock_sistema
+      const ideal = r.stock_ideal != null ? num(r.stock_ideal) : num(r.stock_minimo) * 2
+      return { ...r, base, sugerido: Math.max(ideal - base, 0) }
+    })
+    .filter((r) => num(r.stock_minimo) > 0 && r.base <= num(r.stock_minimo)), [rows])
+
+  const valorNeto = difs.reduce((s, r) => s + r.diferencia * (r.costo ?? 0), 0)
+  const hayCosto = rows.some((r) => r.costo != null)
+
+  function exportar() {
+    const wb = XLSX.utils.book_new()
+    const resultado = contados.map((r) => ({
+      codigo: r.codigo, nombre: r.nombre, unidad: r.unidad, stock_sistema: r.stock_sistema,
+      contado: r.contado, diferencia: r.diferencia, costo: r.costo, valor_diferencia: r.costo != null ? r.diferencia * r.costo : '',
+    }))
+    const ajustes = difs.map((r) => ({ codigo: r.codigo, nombre: r.nombre, stock_nuevo: r.contado, diferencia: r.diferencia }))
+    const rep = reponer.map((r) => ({ codigo: r.codigo, nombre: r.nombre, stock: r.base, minimo: r.stock_minimo, sugerido_pedir: r.sugerido }))
+    for (const [nombre, data] of [['Resultado', resultado], ['Ajustes a cargar', ajustes], ['Reposicion', rep]]) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), nombre)
+    }
+    XLSX.writeFile(wb, `conteo-${(conteo?.nombre ?? 'stock').replace(/[^\w-]+/g, '_')}.xlsx`)
+  }
+
+  async function cerrar() {
+    const aviso = sinContar.length
+      ? `Quedan ${sinContar.length} productos sin contar (conservan su stock actual).\n\n`
+      : ''
+    if (!confirm(`${aviso}¿Cerrar el conteo? Lo contado pasa a ser el stock base de la app.`)) return
+    const { error } = await supabase.rpc('cerrar_conteo', { p_conteo: id })
+    if (error) { setMsg(error.message); return }
+    const { data } = await supabase.from('conteos').select('*').order('created_at', { ascending: false })
+    setConteos(data ?? []); setMsg('Conteo cerrado. Ya podés exportar el resultado.')
+  }
+
+  if (!conteos.length) return <div className="card muted">Todavía no hay conteos.</div>
+
+  const lista = vista === 'dif' ? difs : vista === 'sin' ? sinContar : reponer
+
+  return (
+    <>
+      <div className="card stack">
+        <select value={id} onChange={(e) => setId(e.target.value)}>
+          {conteos.map((c) => <option key={c.id} value={c.id}>{c.nombre} · {c.estado}</option>)}
+        </select>
+        <div className="row">
+          <span className="grow">Contados <b>{contados.length}/{rows.length}</b></span>
+          <span className="grow">Con diferencia <b>{difs.length}</b></span>
+        </div>
+        {hayCosto && <div>Diferencia neta valorizada: <b style={{ color: valorNeto < 0 ? 'var(--bad)' : 'var(--ok)' }}>${money(valorNeto)}</b></div>}
+        <div className="row">
+          <button className="grow" onClick={load}>Actualizar</button>
+          <button className="grow primary" onClick={exportar}>Exportar Excel</button>
+        </div>
+        {conteo?.estado === 'abierto' && <button className="danger" onClick={cerrar}>Cerrar conteo</button>}
+        {msg && <div className="muted">{msg}</div>}
+      </div>
+
+      <div className="card stack">
+        <div className="chips">
+          {[['dif', `Diferencias (${difs.length})`], ['sin', `Sin contar (${sinContar.length})`], ['rep', `A reponer (${reponer.length})`]].map(([k, l]) => (
+            <button key={k} className={vista === k ? 'on' : ''} onClick={() => setVista(k)}>{l}</button>
+          ))}
+        </div>
+        <div className="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Producto</th>
+                {vista === 'dif' && <><th className="n">Sist.</th><th className="n">Cont.</th><th className="n">Dif.</th>{hayCosto && <th className="n">$</th>}</>}
+                {vista === 'sin' && <th className="n">Sist.</th>}
+                {vista === 'rep' && <><th className="n">Stock</th><th className="n">Mín.</th><th className="n">Pedir</th></>}
+              </tr>
+            </thead>
+            <tbody>
+              {lista.map((r) => (
+                <tr key={r.producto_id}>
+                  <td>{r.nombre}<br /><span className="muted">{r.codigo}</span></td>
+                  {vista === 'dif' && <>
+                    <td className="n">{fmt(r.stock_sistema)}</td><td className="n">{fmt(r.contado)}</td>
+                    <td className="n" style={{ color: r.diferencia < 0 ? 'var(--bad)' : 'var(--ok)' }}>{r.diferencia > 0 ? '+' : ''}{fmt(r.diferencia)}</td>
+                    {hayCosto && <td className="n">{r.costo != null ? money(r.diferencia * r.costo) : '-'}</td>}
+                  </>}
+                  {vista === 'sin' && <td className="n">{fmt(r.stock_sistema)}</td>}
+                  {vista === 'rep' && <><td className="n">{fmt(r.base)}</td><td className="n">{fmt(r.stock_minimo)}</td><td className="n"><b>{fmt(r.sugerido)}</b></td></>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!lista.length && <span className="muted">Nada para mostrar.</span>}
+        {vista === 'rep' && <span className="muted">Para usar esta lista, cargá stock mínimo (y opcional ideal) en la pestaña Productos.</span>}
+      </div>
+    </>
+  )
+}
