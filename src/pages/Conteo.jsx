@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../supabase'
 import { enqueue, flush, getCache, getPending, setCache } from '../offline'
-import Scanner from './Scanner'
+import { filtrar, mergePendientes, progreso } from '../lib/conteo'
+import { ETIQUETA, UNIDADES, parseNumero, validarCantidad, validarTotal } from '../lib/unidades'
 
 const num = (v) => (v == null ? 0 : Number(v))
-const fmt = (v) => (Number.isInteger(num(v)) ? String(num(v)) : num(v).toFixed(2))
-const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+const fmt = (v) => (Number.isInteger(num(v)) ? String(num(v)) : num(v).toFixed(3).replace(/0+$/, ''))
 
 export default function Conteo({ profile, onChange }) {
   const admin = profile.rol === 'admin'
@@ -14,9 +14,9 @@ export default function Conteo({ profile, onChange }) {
   const [tick, setTick] = useState(0)
   const [q, setQ] = useState('')
   const [filtro, setFiltro] = useState('todos')
+  const [unidad, setUnidad] = useState('todas')
   const [sel, setSel] = useState(null)
-  const [scan, setScan] = useState(false)
-  const [alta, setAlta] = useState(null) // { barcode }
+  const [alta, setAlta] = useState(false)
   const [nombreConteo, setNombreConteo] = useState('')
   const [err, setErr] = useState('')
   const timer = useRef()
@@ -48,33 +48,10 @@ export default function Conteo({ profile, onChange }) {
   }, [load])
 
   // Suma lo pendiente de enviar para que el usuario vea su carga al instante
-  const view = useMemo(() => {
-    const add = {}, cnt = {}
-    for (const m of getPending()) {
-      if (m.conteo_id !== conteo?.id) continue
-      add[m.producto_id] = (add[m.producto_id] ?? 0) + m.cantidad
-      cnt[m.producto_id] = (cnt[m.producto_id] ?? 0) + 1
-    }
-    return rows.map((r) => ({
-      ...r,
-      contado: num(r.contado) + (add[r.producto_id] ?? 0),
-      movimientos: num(r.movimientos) + (cnt[r.producto_id] ?? 0),
-    }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, tick, conteo])
-
-  const total = view.length
-  const hechos = view.filter((r) => r.movimientos > 0).length
-
-  const lista = useMemo(() => {
-    const t = norm(q)
-    return view.filter((r) => {
-      if (filtro === 'pendientes' && r.movimientos > 0) return false
-      if (filtro === 'contados' && r.movimientos === 0) return false
-      if (!t) return true
-      return norm(r.nombre).includes(t) || norm(r.codigo).includes(t) || norm(r.barcode).includes(t)
-    }).slice(0, 150)
-  }, [view, q, filtro])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const view = useMemo(() => mergePendientes(rows, getPending(), conteo?.id), [rows, tick, conteo])
+  const { total, hechos, pct } = progreso(view)
+  const lista = useMemo(() => filtrar(view, { q, filtro, unidad }), [view, q, filtro, unidad])
 
   async function cargar(row, delta, nota) {
     if (!delta) return
@@ -86,13 +63,6 @@ export default function Conteo({ profile, onChange }) {
     const r = await flush()
     onChange()
     if (!r.error && r.left === 0) load()
-  }
-
-  function onScan(code) {
-    setScan(false)
-    const c = norm(code)
-    const hit = view.find((r) => norm(r.barcode) === c || norm(r.codigo) === c)
-    if (hit) setSel(hit); else setAlta({ barcode: code })
   }
 
   async function iniciar() {
@@ -126,16 +96,20 @@ export default function Conteo({ profile, onChange }) {
           <b className="grow">{conteo.nombre}</b>
           <span className="muted">{hechos} / {total}</span>
         </div>
-        <div className="bar"><i style={{ width: total ? `${(hechos / total) * 100}%` : 0 }} /></div>
-        <div className="row">
-          <input className="grow" placeholder="Buscar nombre o código…" value={q} onChange={(e) => setQ(e.target.value)} />
-          <button onClick={() => setScan(true)} aria-label="Escanear">Escanear</button>
-        </div>
+        <div className="bar"><i style={{ width: `${pct}%` }} /></div>
+        <input placeholder="Buscar nombre o código…" value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="chips">
           {['todos', 'pendientes', 'contados'].map((f) => (
             <button key={f} className={filtro === f ? 'on' : ''} onClick={() => setFiltro(f)}>{f}</button>
           ))}
-          <button onClick={() => setAlta({ barcode: '' })}>+ Producto nuevo</button>
+        </div>
+        <div className="chips">
+          {['todas', ...UNIDADES].map((u) => (
+            <button key={u} className={unidad === u ? 'on' : ''} onClick={() => setUnidad(u)}>
+              {u === 'todas' ? 'todas las unidades' : ETIQUETA[u] + 's'}
+            </button>
+          ))}
+          <button onClick={() => setAlta(true)}>+ Producto nuevo</button>
         </div>
       </div>
 
@@ -145,16 +119,16 @@ export default function Conteo({ profile, onChange }) {
           <div key={r.producto_id} className="item" onClick={() => setSel(r)}>
             <div>
               <b>{r.nombre}</b>
-              <span className="muted">{r.codigo} · {r.unidad}</span>
+              <span className="muted">{r.codigo} · {ETIQUETA[r.unidad] ?? r.unidad}</span>
             </div>
             <div className="qty">
               {r.movimientos > 0
-                ? <><b style={{ fontSize: 20 }}>{fmt(r.contado)}</b><br /><span className="pill ok">contado</span></>
+                ? <><b style={{ fontSize: 20 }}>{fmt(r.contado)} {r.unidad}</b><br /><span className="pill ok">contado</span></>
                 : <span className="pill">sin contar</span>}
             </div>
           </div>
         ))}
-        {view.length > lista.length && <p className="muted">Mostrando {lista.length}. Usá el buscador para acotar.</p>}
+        {view.length > lista.length && <p className="muted">Mostrando {lista.length}. Usá el buscador o los filtros para acotar.</p>}
       </div>
 
       {sel && (
@@ -169,12 +143,11 @@ export default function Conteo({ profile, onChange }) {
           }}
         />
       )}
-      {scan && <Scanner onDetect={onScan} onClose={() => setScan(false)} />}
       {alta && (
         <AltaRapida
-          conteoId={conteo.id} barcode={alta.barcode}
-          onClose={() => setAlta(null)}
-          onDone={async (id) => { setAlta(null); await load(); setSel({ producto_id: id }) }}
+          conteoId={conteo.id}
+          onClose={() => setAlta(false)}
+          onDone={async (id) => { setAlta(false); await load(); setSel({ producto_id: id }) }}
         />
       )}
     </>
@@ -184,28 +157,35 @@ export default function Conteo({ profile, onChange }) {
 function Cargar({ row, admin, onClose, onSumar, onCorregir }) {
   const [n, setN] = useState('')
   const [total, setTotal] = useState('')
-  const valor = Number(String(n).replace(',', '.'))
+  const entero = row.unidad === 'un'
+  const atajos = entero ? [1, 5, 10] : [0.5, 1, 5]
+  const valor = parseNumero(n)
+  const check = valor === null ? { ok: false } : validarCantidad(row.unidad, valor)
+  const valorTotal = parseNumero(total)
+  const checkTotal = valorTotal === null ? { ok: false } : validarTotal(row.unidad, valorTotal)
 
   return (
     <div className="modal" onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} className="stack">
         <div>
           <b>{row.nombre}</b><br />
-          <span className="muted">{row.codigo} · {row.unidad}{admin ? ` · sistema: ${fmt(row.stock_sistema)}` : ''}</span>
+          <span className="muted">{row.codigo} · {ETIQUETA[row.unidad] ?? row.unidad}{admin ? ` · sistema: ${fmt(row.stock_sistema)}` : ''}</span>
         </div>
-        <div className="big">Contado: <b>{fmt(row.contado)}</b></div>
-        <input inputMode="decimal" className="big" placeholder="Cantidad a sumar" value={n} autoFocus
+        <div className="big">Contado: <b>{fmt(row.contado)} {row.unidad}</b></div>
+        <input inputMode={entero ? 'numeric' : 'decimal'} className="big" placeholder={`Cantidad a sumar (${row.unidad})`} value={n} autoFocus
           onChange={(e) => setN(e.target.value)} />
         <div className="row">
-          {[1, 5, 10].map((k) => <button key={k} className="grow" onClick={() => setN(String((Number(n) || 0) + k))}>+{k}</button>)}
+          {atajos.map((k) => <button key={k} className="grow" onClick={() => setN(String((parseNumero(n) || 0) + k))}>+{k}</button>)}
         </div>
-        <button className="primary" disabled={!valor} onClick={() => { onSumar(valor); setN('') }}>Sumar al total</button>
+        {n !== '' && !check.ok && check.error && <div className="err">{check.error}</div>}
+        <button className="primary" disabled={!check.ok} onClick={() => { onSumar(valor); setN('') }}>Sumar al total</button>
         <details>
           <summary className="muted">Corregir el total</summary>
           <div className="row" style={{ marginTop: 8 }}>
-            <input inputMode="decimal" className="grow" placeholder="Total correcto" value={total} onChange={(e) => setTotal(e.target.value)} />
-            <button disabled={total === ''} onClick={() => { onCorregir(Number(String(total).replace(',', '.'))); setTotal('') }}>Fijar</button>
+            <input inputMode={entero ? 'numeric' : 'decimal'} className="grow" placeholder="Total correcto" value={total} onChange={(e) => setTotal(e.target.value)} />
+            <button disabled={!checkTotal.ok} onClick={() => { onCorregir(valorTotal); setTotal('') }}>Fijar</button>
           </div>
+          {total !== '' && !checkTotal.ok && checkTotal.error && <div className="err">{checkTotal.error}</div>}
         </details>
         <button onClick={onClose}>Listo</button>
       </div>
@@ -213,8 +193,8 @@ function Cargar({ row, admin, onClose, onSumar, onCorregir }) {
   )
 }
 
-function AltaRapida({ conteoId, barcode, onClose, onDone }) {
-  const [f, setF] = useState({ nombre: '', unidad: 'un', codigo: '', barcode })
+function AltaRapida({ conteoId, onClose, onDone }) {
+  const [f, setF] = useState({ nombre: '', unidad: 'un', codigo: '' })
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
@@ -222,7 +202,7 @@ function AltaRapida({ conteoId, barcode, onClose, onDone }) {
   async function guardar() {
     setBusy(true); setErr('')
     const { data, error } = await supabase.rpc('alta_rapida', {
-      p_conteo: conteoId, p_nombre: f.nombre, p_unidad: f.unidad, p_codigo: f.codigo, p_barcode: f.barcode,
+      p_conteo: conteoId, p_nombre: f.nombre, p_unidad: f.unidad, p_codigo: f.codigo, p_barcode: '',
     })
     setBusy(false)
     if (error) setErr(navigator.onLine ? error.message : 'Necesitás conexión para dar de alta un producto')
@@ -236,10 +216,9 @@ function AltaRapida({ conteoId, barcode, onClose, onDone }) {
         <span className="muted">Para productos que están en el local pero no en la planilla. Quedan marcados para cargarlos en el sistema principal.</span>
         <input placeholder="Nombre" value={f.nombre} onChange={set('nombre')} autoFocus />
         <select value={f.unidad} onChange={set('unidad')}>
-          {['un', 'lt', 'kg', 'pack', 'caja'].map((u) => <option key={u}>{u}</option>)}
+          {UNIDADES.map((u) => <option key={u} value={u}>{ETIQUETA[u]}</option>)}
         </select>
         <input placeholder="Código interno (opcional)" value={f.codigo} onChange={set('codigo')} />
-        <input placeholder="Código de barras (opcional)" value={f.barcode} onChange={set('barcode')} />
         {err && <div className="err">{err}</div>}
         <button className="primary" disabled={!f.nombre.trim() || busy} onClick={guardar}>Crear y contar</button>
         <button onClick={onClose}>Cancelar</button>

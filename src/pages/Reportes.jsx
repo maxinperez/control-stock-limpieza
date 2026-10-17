@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../supabase'
+import {
+  contados as contadosDe, diferencias, reposicion, sinContar as sinContarDe, valorNeto as valorNetoDe,
+} from '../lib/conteo'
 
 const num = (v) => (v == null ? 0 : Number(v))
 const fmt = (v) => (Number.isInteger(num(v)) ? String(num(v)) : num(v).toFixed(2))
@@ -28,22 +31,12 @@ export default function Reportes() {
   useEffect(() => { load() }, [load])
 
   const conteo = conteos.find((c) => c.id === id)
-  const contados = useMemo(() => rows.filter((r) => r.movimientos > 0), [rows])
-  const sinContar = useMemo(() => rows.filter((r) => r.movimientos === 0), [rows])
-  const difs = useMemo(
-    () => contados.filter((r) => r.diferencia !== 0)
-      .sort((a, b) => Math.abs(b.diferencia * (b.costo ?? 1)) - Math.abs(a.diferencia * (a.costo ?? 1))),
-    [contados],
-  )
-  const reponer = useMemo(() => rows
-    .map((r) => {
-      const base = r.movimientos > 0 ? r.contado : r.stock_sistema
-      const ideal = r.stock_ideal != null ? num(r.stock_ideal) : num(r.stock_minimo) * 2
-      return { ...r, base, sugerido: Math.max(ideal - base, 0) }
-    })
-    .filter((r) => num(r.stock_minimo) > 0 && r.base <= num(r.stock_minimo)), [rows])
+  const contados = useMemo(() => contadosDe(rows), [rows])
+  const sinContar = useMemo(() => sinContarDe(rows), [rows])
+  const difs = useMemo(() => diferencias(rows), [rows])
+  const reponer = useMemo(() => reposicion(rows), [rows])
 
-  const valorNeto = difs.reduce((s, r) => s + r.diferencia * (r.costo ?? 0), 0)
+  const valorNeto = valorNetoDe(difs)
   const hayCosto = rows.some((r) => r.costo != null)
 
   function exportar() {

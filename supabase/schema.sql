@@ -19,7 +19,7 @@ create table public.productos (
   codigo text not null unique,          -- clave de enlace con el sistema principal
   barcode text,
   nombre text not null,
-  unidad text not null default 'un',    -- un, lt, kg, etc.
+  unidad text not null default 'un' check (unidad in ('un','kg','lt')),  -- unidad, kilo, litro
   categoria text,
   costo numeric(14,2),
   stock_actual numeric(14,3) not null default 0,  -- stock "base" de la app
@@ -214,7 +214,40 @@ begin
   return n;
 end $$;
 
+-- Alta manual de un producto (solo admin, sin conteo abierto)
+create function public.crear_producto(
+  p_codigo text, p_nombre text, p_unidad text, p_categoria text,
+  p_costo numeric, p_stock numeric, p_minimo numeric, p_ideal numeric
+) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare v_id uuid;
+begin
+  if not is_admin() then raise exception 'Solo el administrador puede crear productos'; end if;
+  if exists (select 1 from conteos where estado = 'abierto') then
+    raise exception 'Hay un conteo abierto: usá "Producto nuevo" dentro del conteo o cerralo antes';
+  end if;
+  if nullif(trim(p_codigo), '') is null or nullif(trim(p_nombre), '') is null then
+    raise exception 'Código y nombre son obligatorios';
+  end if;
+  if p_unidad not in ('un','kg','lt') then raise exception 'Unidad inválida'; end if;
+  if coalesce(p_stock,0) < 0 or coalesce(p_minimo,0) < 0 or coalesce(p_costo,0) < 0 then
+    raise exception 'Los valores no pueden ser negativos';
+  end if;
+  if p_unidad = 'un' and coalesce(p_stock,0) <> trunc(coalesce(p_stock,0)) then
+    raise exception 'Las unidades se cargan en números enteros';
+  end if;
+  if exists (select 1 from productos where codigo = trim(p_codigo)) then
+    raise exception 'Ya existe un producto con ese código';
+  end if;
+  insert into productos (codigo, nombre, unidad, categoria, costo, stock_actual, stock_minimo, stock_ideal)
+  values (trim(p_codigo), trim(p_nombre), p_unidad, nullif(trim(p_categoria), ''), p_costo,
+          coalesce(p_stock,0), coalesce(p_minimo,0), p_ideal)
+  returning id into v_id;
+  return v_id;
+end $$;
+
 revoke execute on all functions in schema public from public, anon;
+grant execute on function public.crear_producto(text,text,text,text,numeric,numeric,numeric,numeric) to authenticated;
 revoke execute on function public.handle_new_user() from authenticated;
 grant execute on function public.is_active() to authenticated;
 grant execute on function public.is_admin() to authenticated;

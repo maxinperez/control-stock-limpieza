@@ -21,9 +21,20 @@ App web instalable (PWA) para contar stock entre varios usuarios. Funciona **sep
 
 1. **Productos** → importar la planilla (columnas: `codigo`, `nombre`, `stock`; opcionales: `unidad`, `categoria`, `barcode`, `costo`, `stock_minimo`, `stock_ideal`).
 2. **Conteo** → "Iniciar conteo" (congela el stock del sistema como referencia).
-3. Cada persona busca o escanea un producto y **suma** cantidades. Si la interrumpen, retoma después sin perder nada. Funciona sin señal.
+3. Cada persona busca un producto (filtrando por unidad, kilo o litro) y **suma** cantidades. Si la interrumpen, retoma después sin perder nada. Funciona sin señal.
 4. **Reportes** → diferencias, sin contar, a reponer. "Exportar Excel" genera la hoja de ajustes para cargar en el sistema principal.
 5. "Cerrar conteo": lo contado pasa a ser el stock base de la app.
+
+## Tests
+
+```
+npm test
+```
+
+Usan Vitest y están organizados por **clases de equivalencia** (cada `describe` lista las clases y cada `it` prueba un representante). Corré `npm test` antes de subir cada cambio.
+La lógica testeable está en `src/lib/` (unidades, importación, producto nuevo, conteo) y `src/offline.js`.
+
+> En Windows, si la ruta de la carpeta contiene `&`, `npm` falla: usá `node node_modules/vitest/vitest.mjs run`.
 
 ## Vínculo futuro con el sistema principal
 

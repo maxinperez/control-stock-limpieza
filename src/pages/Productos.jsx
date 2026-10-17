@@ -1,68 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../supabase'
+import { parseSheet } from '../lib/importar'
+import { validarProducto } from '../lib/producto'
+import { norm } from '../lib/conteo'
+import { ETIQUETA, UNIDADES, parseNumero } from '../lib/unidades'
 
-const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '')
-
-// Nombres de columna aceptados (sin tildes ni espacios) → campo interno
-const ALIAS = {
-  codigo: ['codigo', 'cod', 'sku', 'codigointerno', 'id', 'codigoarticulo'],
-  barcode: ['barcode', 'codigobarras', 'codbarras', 'ean'],
-  nombre: ['nombre', 'descripcion', 'producto', 'detalle', 'articulo'],
-  unidad: ['unidad', 'um', 'medida'],
-  categoria: ['categoria', 'rubro', 'familia'],
-  costo: ['costo', 'preciocosto', 'costounitario'],
-  stock: ['stock', 'existencia', 'cantidad', 'stockactual'],
-  stock_minimo: ['stockminimo', 'minimo', 'min'],
-  stock_ideal: ['stockideal', 'ideal', 'maximo'],
-}
-
-const toNum = (v) => {
-  if (v === '' || v == null) return null
-  if (typeof v === 'number') return v
-  const n = Number(String(v).trim().replace(/\s/g, '').replace(',', '.'))
-  return Number.isFinite(n) ? n : null
-}
-
-function parseSheet(rows) {
-  if (!rows.length) return { items: [], skipped: 0, missing: ['codigo', 'nombre'] }
-  const map = {}
-  for (const key of Object.keys(rows[0])) {
-    const n = norm(key)
-    for (const [campo, names] of Object.entries(ALIAS)) {
-      if (!(campo in map) && names.includes(n)) map[campo] = key
-    }
-  }
-  const missing = ['nombre'].filter((c) => !(c in map))
-  if (!('codigo' in map) && !('barcode' in map)) missing.push('codigo')
-  if (missing.length) return { items: [], skipped: 0, missing }
-
-  const items = []
-  let skipped = 0
-  for (const r of rows) {
-    const get = (c) => (c in map ? r[map[c]] : undefined)
-    const nombre = String(get('nombre') ?? '').trim()
-    const codigo = String(get('codigo') ?? get('barcode') ?? '').trim()
-    if (!nombre || !codigo) { skipped++; continue }
-    const it = {
-      codigo, nombre,
-      barcode: String(get('barcode') ?? '').trim() || null,
-      unidad: String(get('unidad') ?? '').trim() || 'un',
-      categoria: String(get('categoria') ?? '').trim() || null,
-      costo: toNum(get('costo')),
-      stock: toNum(get('stock')) ?? 0,
-    }
-    // Solo se incluyen si la planilla trae la columna (así no pisan lo cargado en la app)
-    if ('stock_minimo' in map) it.stock_minimo = toNum(get('stock_minimo')) ?? 0
-    if ('stock_ideal' in map) it.stock_ideal = toNum(get('stock_ideal'))
-    items.push(it)
-  }
-  return { items, skipped, missing: [] }
-}
+const VACIO = { codigo: '', nombre: '', unidad: 'un', categoria: '', costo: '', stock: '', stock_minimo: '', stock_ideal: '' }
 
 export default function Productos() {
   const [productos, setProductos] = useState([])
   const [q, setQ] = useState('')
+  const [unidad, setUnidad] = useState('todas')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -78,14 +27,17 @@ export default function Productos() {
     try {
       const wb = XLSX.read(await file.arrayBuffer())
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
-      const { items, skipped, missing } = parseSheet(rows)
+      const { items, skipped, unidadesInvalidas, missing } = parseSheet(rows)
       if (missing.length) { setMsg(`Faltan columnas en la planilla: ${missing.join(', ')}.`); return }
       if (!items.length) { setMsg('No se encontraron productos válidos.'); return }
       for (let i = 0; i < items.length; i += 300) {
         const { error } = await supabase.rpc('importar_productos', { p_rows: items.slice(i, i + 300) })
         if (error) { setMsg(error.message); return }
       }
-      setMsg(`Importados ${items.length} productos${skipped ? ` (${skipped} filas omitidas por no tener código o nombre)` : ''}.`)
+      const avisos = []
+      if (skipped) avisos.push(`${skipped} sin código o nombre`)
+      if (unidadesInvalidas) avisos.push(`${unidadesInvalidas} con unidad no válida (usá un, kg o lt)`)
+      setMsg(`Importados ${items.length} productos${avisos.length ? `. Omitidos: ${avisos.join('; ')}` : ''}.`)
       load()
     } catch (e) {
       setMsg('No se pudo leer el archivo: ' + e.message)
@@ -95,6 +47,8 @@ export default function Productos() {
   function plantilla() {
     const ws = XLSX.utils.json_to_sheet([
       { codigo: 'A001', nombre: 'Esponja doble faz', unidad: 'un', categoria: 'Secos', barcode: '', costo: 450, stock: 120, stock_minimo: 20, stock_ideal: 60 },
+      { codigo: 'L010', nombre: 'Detergente a granel', unidad: 'lt', categoria: 'Líquidos', barcode: '', costo: 900, stock: 35.5, stock_minimo: 10, stock_ideal: 40 },
+      { codigo: 'P020', nombre: 'Jabón en pasta', unidad: 'kg', categoria: 'Pastas', barcode: '', costo: 1200, stock: 12.25, stock_minimo: 5, stock_ideal: 20 },
     ])
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Productos')
@@ -102,24 +56,29 @@ export default function Productos() {
   }
 
   async function guardarUmbral(p, campo, valor) {
-    const v = valor === '' ? null : Number(String(valor).replace(',', '.'))
+    const v = valor === '' ? null : parseNumero(valor)
     if (campo === 'stock_minimo' && v == null) return
-    if (v === p[campo] || Number.isNaN(v)) return
+    if (v === p[campo] || (valor !== '' && v === null)) return
     const { error } = await supabase.from('productos').update({ [campo]: v }).eq('id', p.id)
     if (error) setMsg(error.message)
     else setProductos((ps) => ps.map((x) => (x.id === p.id ? { ...x, [campo]: v } : x)))
   }
 
   const t = norm(q)
-  const lista = productos.filter((p) => !t || norm(p.nombre).includes(t) || norm(p.codigo).includes(t)).slice(0, 100)
+  const filtrados = productos.filter((p) =>
+    (unidad === 'todas' || p.unidad === unidad) &&
+    (!t || norm(p.nombre).includes(t) || norm(p.codigo).includes(t)))
+  const lista = filtrados.slice(0, 100)
   const nuevos = productos.filter((p) => p.origen === 'alta_rapida').length
 
   return (
     <>
+      <NuevoProducto onCreado={load} />
+
       <div className="card stack">
         <b>Importar productos y stock</b>
         <span className="muted">
-          Subí la copia de la planilla del sistema (Excel o CSV). Columnas: codigo, nombre, stock; opcionales: unidad, categoria, barcode, costo, stock_minimo, stock_ideal.
+          Subí la copia de la planilla del sistema (Excel o CSV). Columnas: codigo, nombre, stock; opcionales: unidad (un, kg o lt), categoria, barcode, costo, stock_minimo, stock_ideal.
           Si el código ya existe se actualiza; los que no están no se tocan. No se puede importar con un conteo abierto.
         </span>
         <input type="file" accept=".xlsx,.xls,.csv" disabled={busy} onChange={(e) => { importar(e.target.files[0]); e.target.value = '' }} />
@@ -133,13 +92,20 @@ export default function Productos() {
           {nuevos > 0 && <span className="pill warn">{nuevos} alta rápida</span>}
         </div>
         <input placeholder="Buscar…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <div className="chips">
+          {['todas', ...UNIDADES].map((u) => (
+            <button key={u} className={unidad === u ? 'on' : ''} onClick={() => setUnidad(u)}>
+              {u === 'todas' ? 'todas' : ETIQUETA[u] + 's'}
+            </button>
+          ))}
+        </div>
         <div className="scroll">
           <table>
             <thead><tr><th>Producto</th><th className="n">Stock</th><th className="n">Mín.</th><th className="n">Ideal</th></tr></thead>
             <tbody>
               {lista.map((p) => (
                 <tr key={p.id}>
-                  <td>{p.nombre}<br /><span className="muted">{p.codigo}{p.origen === 'alta_rapida' ? ' · nuevo' : ''}</span></td>
+                  <td>{p.nombre}<br /><span className="muted">{p.codigo} · {p.unidad}{p.origen === 'alta_rapida' ? ' · nuevo' : ''}</span></td>
                   <td className="n">{Number(p.stock_actual)}</td>
                   <td className="n"><Mini value={p.stock_minimo} onSave={(v) => guardarUmbral(p, 'stock_minimo', v)} /></td>
                   <td className="n"><Mini value={p.stock_ideal} onSave={(v) => guardarUmbral(p, 'stock_ideal', v)} /></td>
@@ -148,9 +114,62 @@ export default function Productos() {
             </tbody>
           </table>
         </div>
-        {productos.length > lista.length && <span className="muted">Mostrando {lista.length}. Usá el buscador.</span>}
+        {filtrados.length > lista.length && <span className="muted">Mostrando {lista.length}. Usá el buscador.</span>}
       </div>
     </>
+  )
+}
+
+function NuevoProducto({ onCreado }) {
+  const [f, setF] = useState(VACIO)
+  const [errores, setErrores] = useState({})
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
+  const campo = (k, placeholder, props = {}) => (
+    <div>
+      <input placeholder={placeholder} value={f[k]} onChange={set(k)} {...props} />
+      {errores[k] && <div className="err">{errores[k]}</div>}
+    </div>
+  )
+
+  async function guardar(e) {
+    e.preventDefault()
+    setMsg('')
+    const r = validarProducto(f)
+    setErrores(r.errores)
+    if (!r.ok) return
+    const v = r.valores
+    setBusy(true)
+    const { error } = await supabase.rpc('crear_producto', {
+      p_codigo: v.codigo, p_nombre: v.nombre, p_unidad: v.unidad, p_categoria: v.categoria,
+      p_costo: v.costo, p_stock: v.stock, p_minimo: v.stock_minimo, p_ideal: v.stock_ideal,
+    })
+    setBusy(false)
+    if (error) { setMsg(error.message); return }
+    setF(VACIO)
+    setMsg('Producto creado.')
+    onCreado()
+  }
+
+  return (
+    <details className="card">
+      <summary><b>Cargar un producto a mano</b></summary>
+      <form className="stack" style={{ marginTop: 10 }} onSubmit={guardar}>
+        {campo('codigo', 'Código *')}
+        {campo('nombre', 'Nombre *')}
+        <select value={f.unidad} onChange={set('unidad')}>
+          {UNIDADES.map((u) => <option key={u} value={u}>{ETIQUETA[u]}</option>)}
+        </select>
+        {campo('categoria', 'Categoría (opcional)')}
+        {campo('costo', 'Costo (opcional)', { inputMode: 'decimal' })}
+        {campo('stock', `Stock inicial (${f.unidad})`, { inputMode: f.unidad === 'un' ? 'numeric' : 'decimal' })}
+        {campo('stock_minimo', 'Stock mínimo', { inputMode: 'decimal' })}
+        {campo('stock_ideal', 'Stock ideal (opcional)', { inputMode: 'decimal' })}
+        <button className="primary" disabled={busy}>Crear producto</button>
+        {msg && <div className={msg === 'Producto creado.' ? 'muted' : 'err'}>{msg}</div>}
+      </form>
+    </details>
   )
 }
 
