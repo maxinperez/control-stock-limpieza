@@ -21,10 +21,8 @@ create table public.productos (
   nombre text not null,
   unidad text not null default 'un' check (unidad in ('un','kg','lt')),  -- unidad, kilo, litro
   categoria text,
-  costo numeric(14,2),
   stock_actual numeric(14,3) not null default 0,  -- stock "base" de la app
   stock_minimo numeric(14,3) not null default 0,
-  stock_ideal numeric(14,3),
   activo boolean not null default true,
   origen text not null default 'importado' check (origen in ('importado','alta_rapida')),
   created_at timestamptz not null default now()
@@ -69,8 +67,8 @@ create view public.conteo_resumen with (security_invoker = true) as
 select
   b.conteo_id,
   p.id as producto_id,
-  p.codigo, p.barcode, p.nombre, p.unidad, p.categoria, p.costo,
-  p.stock_minimo, p.stock_ideal,
+  p.codigo, p.barcode, p.nombre, p.unidad, p.categoria,
+  p.stock_minimo,
   b.stock_sistema,
   coalesce(sum(m.cantidad), 0) as contado,
   count(m.id) as movimientos,
@@ -193,22 +191,20 @@ begin
   if exists (select 1 from conteos where estado = 'abierto') then
     raise exception 'Hay un conteo abierto: cerralo antes de importar';
   end if;
-  insert into productos (codigo, barcode, nombre, unidad, categoria, costo, stock_actual, stock_minimo, stock_ideal)
+  insert into productos (codigo, barcode, nombre, unidad, categoria, stock_actual, stock_minimo)
   select r->>'codigo', r->>'barcode', r->>'nombre',
          coalesce(r->>'unidad', 'un'), r->>'categoria',
-         (r->>'costo')::numeric, coalesce((r->>'stock')::numeric, 0),
-         coalesce((r->>'stock_minimo')::numeric, 0), (r->>'stock_ideal')::numeric
+         coalesce((r->>'stock')::numeric, 0),
+         coalesce((r->>'stock_minimo')::numeric, 0)
   from jsonb_array_elements(p_rows) r
   on conflict (codigo) do update set
     nombre = excluded.nombre,
     barcode = coalesce(excluded.barcode, productos.barcode),
     unidad = excluded.unidad,
     categoria = coalesce(excluded.categoria, productos.categoria),
-    costo = coalesce(excluded.costo, productos.costo),
     stock_actual = excluded.stock_actual,
-    -- mínimo/ideal: solo se pisan si la planilla los trae
+    -- el mínimo solo se pisa si la planilla trae esa columna
     stock_minimo = case when p_rows->0 ? 'stock_minimo' then excluded.stock_minimo else productos.stock_minimo end,
-    stock_ideal = case when p_rows->0 ? 'stock_ideal' then excluded.stock_ideal else productos.stock_ideal end,
     activo = true;
   get diagnostics n = row_count;
   return n;
@@ -217,7 +213,7 @@ end $$;
 -- Alta manual de un producto (solo admin, sin conteo abierto)
 create function public.crear_producto(
   p_codigo text, p_nombre text, p_unidad text, p_categoria text,
-  p_costo numeric, p_stock numeric, p_minimo numeric, p_ideal numeric
+  p_stock numeric, p_minimo numeric
 ) returns uuid
 language plpgsql security definer set search_path = public as $$
 declare v_id uuid;
@@ -230,7 +226,7 @@ begin
     raise exception 'Código y nombre son obligatorios';
   end if;
   if p_unidad not in ('un','kg','lt') then raise exception 'Unidad inválida'; end if;
-  if coalesce(p_stock,0) < 0 or coalesce(p_minimo,0) < 0 or coalesce(p_costo,0) < 0 then
+  if coalesce(p_stock,0) < 0 or coalesce(p_minimo,0) < 0 then
     raise exception 'Los valores no pueden ser negativos';
   end if;
   if p_unidad = 'un' and coalesce(p_stock,0) <> trunc(coalesce(p_stock,0)) then
@@ -239,15 +235,15 @@ begin
   if exists (select 1 from productos where codigo = trim(p_codigo)) then
     raise exception 'Ya existe un producto con ese código';
   end if;
-  insert into productos (codigo, nombre, unidad, categoria, costo, stock_actual, stock_minimo, stock_ideal)
-  values (trim(p_codigo), trim(p_nombre), p_unidad, nullif(trim(p_categoria), ''), p_costo,
-          coalesce(p_stock,0), coalesce(p_minimo,0), p_ideal)
+  insert into productos (codigo, nombre, unidad, categoria, stock_actual, stock_minimo)
+  values (trim(p_codigo), trim(p_nombre), p_unidad, nullif(trim(p_categoria), ''),
+          coalesce(p_stock,0), coalesce(p_minimo,0))
   returning id into v_id;
   return v_id;
 end $$;
 
 revoke execute on all functions in schema public from public, anon;
-grant execute on function public.crear_producto(text,text,text,text,numeric,numeric,numeric,numeric) to authenticated;
+grant execute on function public.crear_producto(text,text,text,text,numeric,numeric) to authenticated;
 revoke execute on function public.handle_new_user() from authenticated;
 grant execute on function public.is_active() to authenticated;
 grant execute on function public.is_admin() to authenticated;

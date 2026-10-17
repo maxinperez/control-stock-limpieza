@@ -20,7 +20,7 @@ describe('parseSheet · estructura de la planilla', () => {
     const r = parseSheet([fila()])
     expect(r.missing).toEqual([])
     expect(r.items).toHaveLength(1)
-    expect(r.items[0]).toMatchObject({ codigo: 'A1', nombre: 'Esponja', unidad: 'un', stock: 10, costo: null })
+    expect(r.items[0]).toMatchObject({ codigo: 'A1', nombre: 'Esponja', unidad: 'un', stock: 10 })
   })
 })
 
@@ -62,19 +62,22 @@ describe('parseSheet · unidad', () => {
 })
 
 describe('parseSheet · columnas opcionales', () => {
-  it('sin columnas de mínimo/ideal no se incluyen (no pisan lo cargado en la app)', () => {
-    const it = parseSheet([fila()]).items[0]
-    expect('stock_minimo' in it).toBe(false)
-    expect('stock_ideal' in it).toBe(false)
+  it('sin columna de mínimo no se incluye (no pisa lo cargado en la app)', () => {
+    expect('stock_minimo' in parseSheet([fila()]).items[0]).toBe(false)
   })
-  it('con columnas de mínimo/ideal se incluyen', () => {
-    const it = parseSheet([fila({ stock_minimo: 5, stock_ideal: 20 })]).items[0]
-    expect(it.stock_minimo).toBe(5)
-    expect(it.stock_ideal).toBe(20)
+  it('con columna de mínimo se incluye', () => {
+    expect(parseSheet([fila({ stock_minimo: 5 })]).items[0].stock_minimo).toBe(5)
   })
-  it('mínimo vacío queda en 0 e ideal vacío en null', () => {
-    const it = parseSheet([fila({ stock_minimo: '', stock_ideal: '' })]).items[0]
-    expect(it.stock_minimo).toBe(0)
-    expect(it.stock_ideal).toBeNull()
+  it('mínimo vacío queda en 0', () => {
+    expect(parseSheet([fila({ stock_minimo: '' })]).items[0].stock_minimo).toBe(0)
+  })
+})
+
+describe('parseSheet · columnas que ya no se usan', () => {
+  it('costo e ideal en la planilla se ignoran sin dar error', () => {
+    const r = parseSheet([fila({ costo: 450, stock_ideal: 20 })])
+    expect(r.missing).toEqual([])
+    expect('costo' in r.items[0]).toBe(false)
+    expect('stock_ideal' in r.items[0]).toBe(false)
   })
 })

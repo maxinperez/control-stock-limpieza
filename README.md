@@ -19,7 +19,7 @@ App web instalable (PWA) para contar stock entre varios usuarios. Funciona **sep
 
 ## Flujo de trabajo
 
-1. **Productos** → importar la planilla (columnas: `codigo`, `nombre`, `stock`; opcionales: `unidad`, `categoria`, `barcode`, `costo`, `stock_minimo`, `stock_ideal`).
+1. **Productos** → importar la planilla (columnas: `codigo`, `nombre`, `stock`; opcionales: `unidad` (`un`, `kg` o `lt`), `categoria`, `stock_minimo`).
 2. **Conteo** → "Iniciar conteo" (congela el stock del sistema como referencia).
 3. Cada persona busca un producto (filtrando por unidad, kilo o litro) y **suma** cantidades. Si la interrumpen, retoma después sin perder nada. Funciona sin señal.
 4. **Reportes** → diferencias, sin contar, a reponer. "Exportar Excel" genera la hoja de ajustes para cargar en el sistema principal.

@@ -39,22 +39,16 @@ export function filtrar(view, { q = '', filtro = 'todos', unidad = 'todas', limi
 export const contados = (rows) => rows.filter((r) => num(r.movimientos) > 0)
 export const sinContar = (rows) => rows.filter((r) => num(r.movimientos) === 0)
 
-// Productos contados con diferencia, los de mayor impacto ($) primero.
+// Productos contados con diferencia, las más grandes (en valor absoluto) primero.
 export function diferencias(rows) {
   return contados(rows)
     .filter((r) => num(r.diferencia) !== 0)
-    .sort((a, b) => Math.abs(num(b.diferencia) * (b.costo ?? 1)) - Math.abs(num(a.diferencia) * (a.costo ?? 1)))
+    .sort((a, b) => Math.abs(num(b.diferencia)) - Math.abs(num(a.diferencia)))
 }
 
 // Productos en o por debajo del mínimo. Usa lo contado; si no se contó, el stock del sistema.
 export function reposicion(rows) {
   return rows
-    .map((r) => {
-      const base = num(r.movimientos) > 0 ? num(r.contado) : num(r.stock_sistema)
-      const ideal = r.stock_ideal != null ? num(r.stock_ideal) : num(r.stock_minimo) * 2
-      return { ...r, base, sugerido: Math.max(ideal - base, 0) }
-    })
+    .map((r) => ({ ...r, base: num(r.movimientos) > 0 ? num(r.contado) : num(r.stock_sistema) }))
     .filter((r) => num(r.stock_minimo) > 0 && r.base <= num(r.stock_minimo))
 }
-
-export const valorNeto = (difs) => difs.reduce((s, r) => s + num(r.diferencia) * (r.costo ?? 0), 0)

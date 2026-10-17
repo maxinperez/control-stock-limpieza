@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import {
-  diferencias, filtrar, mergePendientes, progreso, reposicion, sinContar, valorNeto,
-} from './conteo'
+import { diferencias, filtrar, mergePendientes, progreso, reposicion, sinContar } from './conteo'
 
 const row = (o = {}) => ({
-  producto_id: 'p1', codigo: 'A1', barcode: null, nombre: 'Esponja', unidad: 'un', costo: null,
-  stock_sistema: 10, stock_minimo: 0, stock_ideal: null, contado: 0, movimientos: 0, diferencia: -10, ...o,
+  producto_id: 'p1', codigo: 'A1', barcode: null, nombre: 'Esponja', unidad: 'un',
+  stock_sistema: 10, stock_minimo: 0, contado: 0, movimientos: 0, diferencia: -10, ...o,
 })
 
 describe('mergePendientes', () => {
@@ -81,17 +79,18 @@ describe('diferencias y sinContar', () => {
     expect(diferencias(rows).map((r) => r.producto_id)).toEqual(['a'])
     expect(sinContar(rows).map((r) => r.producto_id)).toEqual(['c'])
   })
-  it('ordena por impacto en pesos, de mayor a menor (en valor absoluto)', () => {
+  it('ordena de mayor a menor diferencia en valor absoluto (faltantes y sobrantes juntos)', () => {
     const rows = [
-      row({ producto_id: 'barato', movimientos: 1, diferencia: -10, costo: 1 }),
-      row({ producto_id: 'caro', movimientos: 1, diferencia: 2, costo: 100 }),
+      row({ producto_id: 'chica', movimientos: 1, diferencia: 1 }),
+      row({ producto_id: 'faltante', movimientos: 1, diferencia: -10 }),
+      row({ producto_id: 'sobrante', movimientos: 1, diferencia: 4 }),
     ]
-    expect(diferencias(rows).map((r) => r.producto_id)).toEqual(['caro', 'barato'])
+    expect(diferencias(rows).map((r) => r.producto_id)).toEqual(['faltante', 'sobrante', 'chica'])
   })
 })
 
 describe('reposicion', () => {
-  // Clases: sin mínimo · sobre el mínimo · en el mínimo (límite) · bajo el mínimo · contado vs no contado · ideal explícito vs por defecto
+  // Clases: sin mínimo · sobre el mínimo · en el mínimo (límite) · bajo el mínimo · contado vs no contado
   it('sin stock mínimo configurado no se sugiere', () => {
     expect(reposicion([row({ stock_minimo: 0, stock_sistema: 0 })])).toEqual([])
   })
@@ -109,21 +108,11 @@ describe('reposicion', () => {
     const r = reposicion([row({ stock_minimo: 5, stock_sistema: 3, movimientos: 0 })])
     expect(r[0].base).toBe(3)
   })
-  it('ideal por defecto es el doble del mínimo', () => {
-    expect(reposicion([row({ stock_minimo: 5, movimientos: 1, contado: 2 })])[0].sugerido).toBe(8)
+  it('con stock en 0 y mínimo configurado sí se sugiere', () => {
+    expect(reposicion([row({ stock_minimo: 5, movimientos: 1, contado: 0 })])).toHaveLength(1)
   })
-  it('usa el ideal explícito', () => {
-    expect(reposicion([row({ stock_minimo: 5, stock_ideal: 20, movimientos: 1, contado: 2 })])[0].sugerido).toBe(18)
+  it('conserva los datos del producto y agrega la base usada', () => {
+    const r = reposicion([row({ producto_id: 'x', nombre: 'Lavandina', unidad: 'lt', stock_minimo: 5, movimientos: 1, contado: 1.5 })])[0]
+    expect(r).toMatchObject({ producto_id: 'x', nombre: 'Lavandina', unidad: 'lt', base: 1.5 })
   })
-  it('el sugerido nunca es negativo', () => {
-    expect(reposicion([row({ stock_minimo: 5, stock_ideal: 1, movimientos: 1, contado: 3 })])[0].sugerido).toBe(0)
-  })
-})
-
-describe('valorNeto', () => {
-  it('lista vacía: 0', () => expect(valorNeto([])).toBe(0))
-  it('suma faltantes y sobrantes valorizados', () => {
-    expect(valorNeto([row({ diferencia: -3, costo: 100 }), row({ diferencia: 1, costo: 50 })])).toBe(-250)
-  })
-  it('producto sin costo no suma', () => expect(valorNeto([row({ diferencia: -3, costo: null })])).toBe(0))
 })

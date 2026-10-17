@@ -6,7 +6,7 @@ import { validarProducto } from '../lib/producto'
 import { norm } from '../lib/conteo'
 import { ETIQUETA, UNIDADES, parseNumero } from '../lib/unidades'
 
-const VACIO = { codigo: '', nombre: '', unidad: 'un', categoria: '', costo: '', stock: '', stock_minimo: '', stock_ideal: '' }
+const VACIO = { codigo: '', nombre: '', unidad: 'un', categoria: '', stock: '', stock_minimo: '' }
 
 export default function Productos() {
   const [productos, setProductos] = useState([])
@@ -46,22 +46,21 @@ export default function Productos() {
 
   function plantilla() {
     const ws = XLSX.utils.json_to_sheet([
-      { codigo: 'A001', nombre: 'Esponja doble faz', unidad: 'un', categoria: 'Secos', barcode: '', costo: 450, stock: 120, stock_minimo: 20, stock_ideal: 60 },
-      { codigo: 'L010', nombre: 'Detergente a granel', unidad: 'lt', categoria: 'Líquidos', barcode: '', costo: 900, stock: 35.5, stock_minimo: 10, stock_ideal: 40 },
-      { codigo: 'P020', nombre: 'Jabón en pasta', unidad: 'kg', categoria: 'Pastas', barcode: '', costo: 1200, stock: 12.25, stock_minimo: 5, stock_ideal: 20 },
+      { codigo: 'A001', nombre: 'Esponja doble faz', unidad: 'un', categoria: 'Secos', stock: 120, stock_minimo: 20 },
+      { codigo: 'L010', nombre: 'Detergente a granel', unidad: 'lt', categoria: 'Líquidos', stock: 35.5, stock_minimo: 10 },
+      { codigo: 'P020', nombre: 'Jabón en pasta', unidad: 'kg', categoria: 'Pastas', stock: 12.25, stock_minimo: 5 },
     ])
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Productos')
     XLSX.writeFile(wb, 'plantilla-productos.xlsx')
   }
 
-  async function guardarUmbral(p, campo, valor) {
-    const v = valor === '' ? null : parseNumero(valor)
-    if (campo === 'stock_minimo' && v == null) return
-    if (v === p[campo] || (valor !== '' && v === null)) return
-    const { error } = await supabase.from('productos').update({ [campo]: v }).eq('id', p.id)
+  async function guardarMinimo(p, valor) {
+    const v = parseNumero(valor)
+    if (v === null || v < 0 || v === Number(p.stock_minimo)) return
+    const { error } = await supabase.from('productos').update({ stock_minimo: v }).eq('id', p.id)
     if (error) setMsg(error.message)
-    else setProductos((ps) => ps.map((x) => (x.id === p.id ? { ...x, [campo]: v } : x)))
+    else setProductos((ps) => ps.map((x) => (x.id === p.id ? { ...x, stock_minimo: v } : x)))
   }
 
   const t = norm(q)
@@ -78,7 +77,7 @@ export default function Productos() {
       <div className="card stack">
         <b>Importar productos y stock</b>
         <span className="muted">
-          Subí la copia de la planilla del sistema (Excel o CSV). Columnas: codigo, nombre, stock; opcionales: unidad (un, kg o lt), categoria, barcode, costo, stock_minimo, stock_ideal.
+          Subí la copia de la planilla del sistema (Excel o CSV). Columnas: codigo, nombre, stock; opcionales: unidad (un, kg o lt), categoria, stock_minimo.
           Si el código ya existe se actualiza; los que no están no se tocan. No se puede importar con un conteo abierto.
         </span>
         <input type="file" accept=".xlsx,.xls,.csv" disabled={busy} onChange={(e) => { importar(e.target.files[0]); e.target.value = '' }} />
@@ -101,14 +100,13 @@ export default function Productos() {
         </div>
         <div className="scroll">
           <table>
-            <thead><tr><th>Producto</th><th className="n">Stock</th><th className="n">Mín.</th><th className="n">Ideal</th></tr></thead>
+            <thead><tr><th>Producto</th><th className="n">Stock</th><th className="n">Mín.</th></tr></thead>
             <tbody>
               {lista.map((p) => (
                 <tr key={p.id}>
                   <td>{p.nombre}<br /><span className="muted">{p.codigo} · {p.unidad}{p.origen === 'alta_rapida' ? ' · nuevo' : ''}</span></td>
                   <td className="n">{Number(p.stock_actual)}</td>
-                  <td className="n"><Mini value={p.stock_minimo} onSave={(v) => guardarUmbral(p, 'stock_minimo', v)} /></td>
-                  <td className="n"><Mini value={p.stock_ideal} onSave={(v) => guardarUmbral(p, 'stock_ideal', v)} /></td>
+                  <td className="n"><Mini value={p.stock_minimo} onSave={(v) => guardarMinimo(p, v)} /></td>
                 </tr>
               ))}
             </tbody>
@@ -143,7 +141,7 @@ function NuevoProducto({ onCreado }) {
     setBusy(true)
     const { error } = await supabase.rpc('crear_producto', {
       p_codigo: v.codigo, p_nombre: v.nombre, p_unidad: v.unidad, p_categoria: v.categoria,
-      p_costo: v.costo, p_stock: v.stock, p_minimo: v.stock_minimo, p_ideal: v.stock_ideal,
+      p_stock: v.stock, p_minimo: v.stock_minimo,
     })
     setBusy(false)
     if (error) { setMsg(error.message); return }
@@ -162,10 +160,8 @@ function NuevoProducto({ onCreado }) {
           {UNIDADES.map((u) => <option key={u} value={u}>{ETIQUETA[u]}</option>)}
         </select>
         {campo('categoria', 'Categoría (opcional)')}
-        {campo('costo', 'Costo (opcional)', { inputMode: 'decimal' })}
         {campo('stock', `Stock inicial (${f.unidad})`, { inputMode: f.unidad === 'un' ? 'numeric' : 'decimal' })}
         {campo('stock_minimo', 'Stock mínimo', { inputMode: 'decimal' })}
-        {campo('stock_ideal', 'Stock ideal (opcional)', { inputMode: 'decimal' })}
         <button className="primary" disabled={busy}>Crear producto</button>
         {msg && <div className={msg === 'Producto creado.' ? 'muted' : 'err'}>{msg}</div>}
       </form>

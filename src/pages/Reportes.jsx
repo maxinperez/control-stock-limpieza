@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../supabase'
-import {
-  contados as contadosDe, diferencias, reposicion, sinContar as sinContarDe, valorNeto as valorNetoDe,
-} from '../lib/conteo'
+import { contados as contadosDe, diferencias, reposicion, sinContar as sinContarDe } from '../lib/conteo'
 
 const num = (v) => (v == null ? 0 : Number(v))
-const fmt = (v) => (Number.isInteger(num(v)) ? String(num(v)) : num(v).toFixed(2))
-const money = (v) => num(v).toLocaleString('es-AR', { maximumFractionDigits: 0 })
+const fmt = (v) => (Number.isInteger(num(v)) ? String(num(v)) : num(v).toFixed(3).replace(/0+$/, ''))
 
 export default function Reportes() {
   const [conteos, setConteos] = useState([])
@@ -36,17 +33,14 @@ export default function Reportes() {
   const difs = useMemo(() => diferencias(rows), [rows])
   const reponer = useMemo(() => reposicion(rows), [rows])
 
-  const valorNeto = valorNetoDe(difs)
-  const hayCosto = rows.some((r) => r.costo != null)
-
   function exportar() {
     const wb = XLSX.utils.book_new()
     const resultado = contados.map((r) => ({
       codigo: r.codigo, nombre: r.nombre, unidad: r.unidad, stock_sistema: r.stock_sistema,
-      contado: r.contado, diferencia: r.diferencia, costo: r.costo, valor_diferencia: r.costo != null ? r.diferencia * r.costo : '',
+      contado: r.contado, diferencia: r.diferencia,
     }))
-    const ajustes = difs.map((r) => ({ codigo: r.codigo, nombre: r.nombre, stock_nuevo: r.contado, diferencia: r.diferencia }))
-    const rep = reponer.map((r) => ({ codigo: r.codigo, nombre: r.nombre, stock: r.base, minimo: r.stock_minimo, sugerido_pedir: r.sugerido }))
+    const ajustes = difs.map((r) => ({ codigo: r.codigo, nombre: r.nombre, unidad: r.unidad, stock_nuevo: r.contado, diferencia: r.diferencia }))
+    const rep = reponer.map((r) => ({ codigo: r.codigo, nombre: r.nombre, unidad: r.unidad, stock: r.base, minimo: r.stock_minimo }))
     for (const [nombre, data] of [['Resultado', resultado], ['Ajustes a cargar', ajustes], ['Reposicion', rep]]) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), nombre)
     }
@@ -78,7 +72,6 @@ export default function Reportes() {
           <span className="grow">Contados <b>{contados.length}/{rows.length}</b></span>
           <span className="grow">Con diferencia <b>{difs.length}</b></span>
         </div>
-        {hayCosto && <div>Diferencia neta valorizada: <b style={{ color: valorNeto < 0 ? 'var(--bad)' : 'var(--ok)' }}>${money(valorNeto)}</b></div>}
         <div className="row">
           <button className="grow" onClick={load}>Actualizar</button>
           <button className="grow primary" onClick={exportar}>Exportar Excel</button>
@@ -98,9 +91,9 @@ export default function Reportes() {
             <thead>
               <tr>
                 <th>Producto</th>
-                {vista === 'dif' && <><th className="n">Sist.</th><th className="n">Cont.</th><th className="n">Dif.</th>{hayCosto && <th className="n">$</th>}</>}
+                {vista === 'dif' && <><th className="n">Sist.</th><th className="n">Cont.</th><th className="n">Dif.</th></>}
                 {vista === 'sin' && <th className="n">Sist.</th>}
-                {vista === 'rep' && <><th className="n">Stock</th><th className="n">Mín.</th><th className="n">Pedir</th></>}
+                {vista === 'rep' && <><th className="n">Stock</th><th className="n">Mín.</th></>}
               </tr>
             </thead>
             <tbody>
@@ -110,17 +103,16 @@ export default function Reportes() {
                   {vista === 'dif' && <>
                     <td className="n">{fmt(r.stock_sistema)}</td><td className="n">{fmt(r.contado)}</td>
                     <td className="n" style={{ color: r.diferencia < 0 ? 'var(--bad)' : 'var(--ok)' }}>{r.diferencia > 0 ? '+' : ''}{fmt(r.diferencia)}</td>
-                    {hayCosto && <td className="n">{r.costo != null ? money(r.diferencia * r.costo) : '-'}</td>}
                   </>}
                   {vista === 'sin' && <td className="n">{fmt(r.stock_sistema)}</td>}
-                  {vista === 'rep' && <><td className="n">{fmt(r.base)}</td><td className="n">{fmt(r.stock_minimo)}</td><td className="n"><b>{fmt(r.sugerido)}</b></td></>}
+                  {vista === 'rep' && <><td className="n">{fmt(r.base)}</td><td className="n">{fmt(r.stock_minimo)}</td></>}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
         {!lista.length && <span className="muted">Nada para mostrar.</span>}
-        {vista === 'rep' && <span className="muted">Para usar esta lista, cargá stock mínimo (y opcional ideal) en la pestaña Productos.</span>}
+        {vista === 'rep' && <span className="muted">Para usar esta lista, cargá el stock mínimo de cada producto en la pestaña Productos.</span>}
       </div>
     </>
   )

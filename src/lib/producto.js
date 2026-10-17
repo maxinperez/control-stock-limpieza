@@ -10,25 +10,20 @@ export function validarProducto(f) {
   if (!nombre) errores.nombre = 'El nombre es obligatorio'
   if (!UNIDADES.includes(f.unidad)) errores.unidad = 'Elegí una unidad'
 
-  const campoNumero = (campo, { obligatorio = false } = {}) => {
+  // Vacío = 0. Si se escribe algo, tiene que ser un número no negativo.
+  const campoNumero = (campo) => {
     const raw = f[campo]
-    const vacio = raw === '' || raw == null
-    if (vacio) return obligatorio ? 0 : null
+    if (raw === '' || raw == null) return 0
     const n = parseNumero(raw)
     if (n === null) { errores[campo] = 'Ingresá un número'; return null }
     if (n < 0) { errores[campo] = 'No puede ser negativo'; return null }
     return n
   }
-  const stock = campoNumero('stock', { obligatorio: true })
-  const stock_minimo = campoNumero('stock_minimo', { obligatorio: true })
-  const stock_ideal = campoNumero('stock_ideal')
-  const costo = campoNumero('costo')
+  const stock = campoNumero('stock')
+  const stock_minimo = campoNumero('stock_minimo')
 
   if (f.unidad === 'un' && stock !== null && !Number.isInteger(stock) && !errores.stock) {
     errores.stock = 'Las unidades se cargan en enteros'
-  }
-  if (stock_ideal !== null && stock_minimo !== null && stock_ideal < stock_minimo && !errores.stock_ideal) {
-    errores.stock_ideal = 'El ideal no puede ser menor al mínimo'
   }
 
   return {
@@ -37,7 +32,7 @@ export function validarProducto(f) {
     valores: {
       codigo, nombre, unidad: f.unidad,
       categoria: String(f.categoria ?? '').trim() || null,
-      costo, stock: stock ?? 0, stock_minimo: stock_minimo ?? 0, stock_ideal,
+      stock: stock ?? 0, stock_minimo: stock_minimo ?? 0,
     },
   }
 }

@@ -9,10 +9,8 @@ const ALIAS = {
   nombre: ['nombre', 'descripcion', 'producto', 'detalle', 'articulo'],
   unidad: ['unidad', 'um', 'medida'],
   categoria: ['categoria', 'rubro', 'familia'],
-  costo: ['costo', 'preciocosto', 'costounitario'],
   stock: ['stock', 'existencia', 'cantidad', 'stockactual'],
   stock_minimo: ['stockminimo', 'minimo', 'min'],
-  stock_ideal: ['stockideal', 'ideal', 'maximo'],
 }
 
 // rows: filas de la planilla (objetos). Devuelve los productos listos para importar.
@@ -45,12 +43,10 @@ export function parseSheet(rows) {
       codigo, nombre, unidad,
       barcode: String(get('barcode') ?? '').trim() || null,
       categoria: String(get('categoria') ?? '').trim() || null,
-      costo: parseNumero(get('costo')),
       stock: parseNumero(get('stock')) ?? 0,
     }
-    // Solo se incluyen si la planilla trae la columna (así no pisan lo cargado en la app)
+    // Solo se incluye si la planilla trae la columna (así no pisa lo cargado en la app)
     if ('stock_minimo' in map) it.stock_minimo = parseNumero(get('stock_minimo')) ?? 0
-    if ('stock_ideal' in map) it.stock_ideal = parseNumero(get('stock_ideal'))
     items.push(it)
   }
   return { items, skipped, unidadesInvalidas, missing: [] }
