@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../supabase'
-import { contados as contadosDe, diferencias, puedeExportar, reposicion, sinContar as sinContarDe } from '../lib/conteo'
+import {
+  contados as contadosDe, diferencias, puedeExportar, reposicion, sinContar as sinContarDe,
+  textoCierreHecho, textoConfirmarCierre,
+} from '../lib/conteo'
 
 const num = (v) => (v == null ? 0 : Number(v))
 const fmt = (v) => (Number.isInteger(num(v)) ? String(num(v)) : num(v).toFixed(3).replace(/0+$/, ''))
@@ -56,7 +59,7 @@ export default function Reportes() {
     const { error } = await supabase.rpc('cerrar_conteo', { p_conteo: id })
     if (error) { setMsg(error.message); return }
     const { data } = await supabase.from('conteos').select('*').order('created_at', { ascending: false })
-    setConteos(data ?? []); setMsg('Conteo cerrado. Ya podés exportar el resultado.')
+    setConteos(data ?? []); setMsg(textoCierreHecho(rows))
   }
 
   if (!conteos.length) return <div className="card muted">Todavía no hay conteos.</div>
@@ -84,10 +87,7 @@ export default function Reportes() {
         {conteo?.estado === 'abierto' && confirmandoCierre && (
           <div className="card stack" style={{ margin: 0 }}>
             <b>¿Cerrar el conteo?</b>
-            <span className="muted">
-              {sinContar.length > 0 && `Quedan ${sinContar.length} productos sin contar (conservan su stock actual). `}
-              Lo contado pasa a ser el stock base de la app y ya no se podrán cargar más cantidades.
-            </span>
+            <span className="muted">{textoConfirmarCierre(rows)}</span>
             <button className="danger" onClick={cerrar}>Sí, cerrar conteo</button>
             <button onClick={() => setConfirmandoCierre(false)}>No, volver</button>
           </div>

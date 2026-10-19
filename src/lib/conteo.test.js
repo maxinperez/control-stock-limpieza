@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { diferencias, filtrar, mergePendientes, progreso, puedeExportar, reposicion, sinContar } from './conteo'
+import {
+  diferencias, filtrar, mergePendientes, progreso, puedeExportar, reposicion, sinContar,
+  textoCierreHecho, textoConfirmarCierre,
+} from './conteo'
 
 const row = (o = {}) => ({
   producto_id: 'p1', codigo: 'A1', barcode: null, nombre: 'Esponja', unidad: 'un',
@@ -90,6 +93,46 @@ describe('puedeExportar', () => {
   it('movimientos que llegan como texto desde la base', () => {
     expect(puedeExportar([row({ movimientos: '0' })]).ok).toBe(false)
     expect(puedeExportar([row({ movimientos: '3' })]).ok).toBe(true)
+  })
+})
+
+describe('textos de cierre del conteo', () => {
+  // Clases: ninguno contado · algunos contados (1 faltante / varios faltantes) · todos contados
+  const contado = (id) => row({ producto_id: id, movimientos: 1 })
+  const sin = (id) => row({ producto_id: id, movimientos: 0 })
+
+  it('antes de cerrar, sin ningún contado: avisa que se cierra vacío', () => {
+    const t = textoConfirmarCierre([sin('a'), sin('b')])
+    expect(t).toMatch(/Ningún producto fue contado/)
+    expect(t).toMatch(/vacío/)
+  })
+  it('antes de cerrar, conteo sin productos: también avisa que se cierra vacío', () => {
+    expect(textoConfirmarCierre([])).toMatch(/vacío/)
+  })
+  it('antes de cerrar, con varios sin contar: cuenta los que faltan', () => {
+    const t = textoConfirmarCierre([contado('a'), sin('b'), sin('c')])
+    expect(t).toMatch(/Quedan 2 productos sin contar/)
+    expect(t).not.toMatch(/vacío/)
+  })
+  it('antes de cerrar, con uno sin contar: singular', () => {
+    expect(textoConfirmarCierre([contado('a'), sin('b')])).toMatch(/Queda 1 producto sin contar/)
+  })
+  it('antes de cerrar, todos contados: no menciona faltantes', () => {
+    const t = textoConfirmarCierre([contado('a'), contado('b')])
+    expect(t).not.toMatch(/sin contar/)
+    expect(t).toMatch(/stock base/)
+  })
+
+  it('después de cerrar sin ningún contado: avisa que no hay resultado', () => {
+    const t = textoCierreHecho([sin('a')])
+    expect(t).toMatch(/sin ningún producto contado/)
+    expect(t).not.toMatch(/Ya podés exportar/)
+  })
+  it('después de cerrar con un contado: singular y permite exportar', () => {
+    expect(textoCierreHecho([contado('a'), sin('b')])).toBe('Conteo cerrado con 1 producto contado. Ya podés exportar el resultado.')
+  })
+  it('después de cerrar con varios contados: plural', () => {
+    expect(textoCierreHecho([contado('a'), contado('b')])).toMatch(/2 productos contados/)
   })
 })
 

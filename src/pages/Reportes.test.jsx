@@ -20,6 +20,7 @@ vi.mock('xlsx', () => ({
 }))
 
 import * as XLSX from 'xlsx'
+import { supabase } from '../supabase'
 import Reportes from './Reportes'
 
 const conteo = { id: 'c1', nombre: 'Conteo 17/10', estado: 'cerrado' }
@@ -36,7 +37,8 @@ async function montar() {
   await act(async () => { raiz.render(<Reportes />) })
   await act(async () => {}) // deja terminar las consultas
 }
-const botonExportar = () => [...contenedor.querySelectorAll('button')].find((b) => b.textContent.includes('Exportar'))
+const boton = (texto) => [...contenedor.querySelectorAll('button')].find((b) => b.textContent.includes(texto))
+const botonExportar = () => boton('Exportar')
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -63,6 +65,33 @@ describe('Reportes · botón Exportar Excel', () => {
     await montar()
     await act(async () => botonExportar().click())
     expect(XLSX.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('cerrar un conteo vacío: pide confirmación avisando que está vacío y luego informa que se cerró sin productos', async () => {
+    respuestas.conteos = [{ ...conteo, estado: 'abierto' }]
+    respuestas.conteo_resumen = [fila({ movimientos: 0 })]
+    supabase.rpc.mockResolvedValue({ error: null })
+    await montar()
+
+    await act(async () => boton('Cerrar conteo').click())
+    expect(contenedor.textContent).toMatch(/Ningún producto fue contado/)
+    expect(supabase.rpc).not.toHaveBeenCalled() // todavía no cerró
+
+    await act(async () => boton('Sí, cerrar conteo').click())
+    expect(supabase.rpc).toHaveBeenCalledWith('cerrar_conteo', { p_conteo: 'c1' })
+    expect(contenedor.textContent).toMatch(/Conteo cerrado sin ningún producto contado/)
+    expect(contenedor.textContent).not.toMatch(/Ya podés exportar/)
+  })
+
+  it('cerrar un conteo con productos contados: informa cuántos y permite exportar', async () => {
+    respuestas.conteos = [{ ...conteo, estado: 'abierto' }]
+    respuestas.conteo_resumen = [fila({ movimientos: 2, contado: 4 }), fila({ producto_id: 'p2', movimientos: 0 })]
+    supabase.rpc.mockResolvedValue({ error: null })
+    await montar()
+    await act(async () => boton('Cerrar conteo').click())
+    expect(contenedor.textContent).toMatch(/Queda 1 producto sin contar/)
+    await act(async () => boton('Sí, cerrar conteo').click())
+    expect(contenedor.textContent).toMatch(/Conteo cerrado con 1 producto contado\. Ya podés exportar/)
   })
 
   it('con un producto contado: botón habilitado y genera el archivo', async () => {

@@ -45,6 +45,29 @@ export function puedeExportar(rows) {
   return { ok: true, motivo: '' }
 }
 
+const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`
+
+// Aviso antes de cerrar el conteo, según lo que se contó.
+export function textoConfirmarCierre(rows) {
+  const hechos = rows.filter((r) => num(r.movimientos) > 0).length
+  const faltan = rows.length - hechos
+  const final = 'Ya no se podrán cargar más cantidades.'
+  if (hechos === 0) {
+    return `Ningún producto fue contado: el conteo se va a cerrar vacío y el stock base de la app no cambia. ${final}`
+  }
+  const sin = faltan > 0
+    ? `${faltan === 1 ? 'Queda' : 'Quedan'} ${plural(faltan, 'producto', 'productos')} sin contar (conservan su stock actual). `
+    : ''
+  return `${sin}Lo contado pasa a ser el stock base de la app. ${final}`
+}
+
+// Aviso después de cerrar el conteo.
+export function textoCierreHecho(rows) {
+  const hechos = rows.filter((r) => num(r.movimientos) > 0).length
+  if (hechos === 0) return 'Conteo cerrado sin ningún producto contado: no hay resultado para exportar.'
+  return `Conteo cerrado con ${plural(hechos, 'producto contado', 'productos contados')}. Ya podés exportar el resultado.`
+}
+
 export const contados = (rows) => rows.filter((r) => num(r.movimientos) > 0)
 export const sinContar = (rows) => rows.filter((r) => num(r.movimientos) === 0)
 
