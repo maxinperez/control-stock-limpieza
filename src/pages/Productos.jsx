@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../supabase'
 import { parseSheet } from '../lib/importar'
-import { validarProducto } from '../lib/producto'
-import { norm } from '../lib/conteo'
+import { AVISO_ELIMINAR, aFormulario, filtrarProductos, validarProducto } from '../lib/producto'
 import { ETIQUETA, UNIDADES, parseNumero } from '../lib/unidades'
 
 const VACIO = { codigo: '', nombre: '', unidad: 'un', categoria: '', stock: '', stock_minimo: '' }
@@ -14,10 +13,18 @@ export default function Productos() {
   const [unidad, setUnidad] = useState('todas')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [archivados, setArchivados] = useState(false)
+  const [editando, setEditando] = useState(null)
+  const [aviso, setAviso] = useState('')
+  const [conteoAbierto, setConteoAbierto] = useState(false)
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from('productos').select('*').order('nombre').range(0, 4999)
+    const [{ data }, { data: abierto }] = await Promise.all([
+      supabase.from('productos').select('*').order('nombre').range(0, 4999),
+      supabase.from('conteos').select('id').eq('estado', 'abierto').maybeSingle(),
+    ])
     setProductos(data ?? [])
+    setConteoAbierto(Boolean(abierto))
   }, [])
   useEffect(() => { load() }, [load])
 
@@ -63,12 +70,11 @@ export default function Productos() {
     else setProductos((ps) => ps.map((x) => (x.id === p.id ? { ...x, stock_minimo: v } : x)))
   }
 
-  const t = norm(q)
-  const filtrados = productos.filter((p) =>
-    (unidad === 'todas' || p.unidad === unidad) &&
-    (!t || norm(p.nombre).includes(t) || norm(p.codigo).includes(t)))
-  const lista = filtrados.slice(0, 100)
-  const nuevos = productos.filter((p) => p.origen === 'alta_rapida').length
+  const lista = filtrarProductos(productos, { q, unidad, archivados })
+  const totalFiltrados = filtrarProductos(productos, { q, unidad, archivados, limit: Infinity }).length
+  const activos = productos.filter((p) => p.activo !== false).length
+  const nArchivados = productos.length - activos
+  const nuevos = productos.filter((p) => p.origen === 'alta_rapida' && p.activo !== false).length
 
   return (
     <>
@@ -87,7 +93,7 @@ export default function Productos() {
 
       <div className="card stack">
         <div className="row">
-          <b className="grow">{productos.length} productos</b>
+          <b className="grow">{activos} productos</b>
           {nuevos > 0 && <span className="pill warn">{nuevos} alta rápida</span>}
         </div>
         <input placeholder="Buscar…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -97,23 +103,38 @@ export default function Productos() {
               {u === 'todas' ? 'todas' : ETIQUETA[u] + 's'}
             </button>
           ))}
+          <button className={archivados ? 'on' : ''} onClick={() => setArchivados(!archivados)}>
+            archivados ({nArchivados})
+          </button>
         </div>
         <div className="scroll">
           <table>
-            <thead><tr><th>Producto</th><th className="n">Stock</th><th className="n">Mín.</th></tr></thead>
+            <thead><tr><th>Producto</th><th className="n">Stock</th><th className="n">Mín.</th><th /></tr></thead>
             <tbody>
               {lista.map((p) => (
                 <tr key={p.id}>
                   <td>{p.nombre}<br /><span className="muted">{p.codigo} · {p.unidad}{p.origen === 'alta_rapida' ? ' · nuevo' : ''}</span></td>
                   <td className="n">{Number(p.stock_actual)}</td>
                   <td className="n"><Mini value={p.stock_minimo} onSave={(v) => guardarMinimo(p, v)} /></td>
+                  <td><button style={{ padding: '6px 10px' }} onClick={() => setEditando(p)}>Editar</button></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        {filtrados.length > lista.length && <span className="muted">Mostrando {lista.length}. Usá el buscador.</span>}
+        {aviso && <div className="muted">{aviso}</div>}
+        {!lista.length && <span className="muted">{archivados ? 'No hay productos archivados.' : 'Sin resultados.'}</span>}
+        {totalFiltrados > lista.length && <span className="muted">Mostrando {lista.length}. Usá el buscador.</span>}
       </div>
+
+      {editando && (
+        <EditarProducto
+          producto={editando}
+          conteoAbierto={conteoAbierto}
+          onClose={() => setEditando(null)}
+          onCambio={(texto) => { setEditando(null); setAviso(texto); load() }}
+        />
+      )}
     </>
   )
 }
@@ -166,6 +187,98 @@ function NuevoProducto({ onCreado }) {
         {msg && <div className={msg === 'Producto creado.' ? 'muted' : 'err'}>{msg}</div>}
       </form>
     </details>
+  )
+}
+
+function EditarProducto({ producto, conteoAbierto, onClose, onCambio }) {
+  const archivado = producto.activo === false
+  const [f, setF] = useState(aFormulario(producto))
+  const [errores, setErrores] = useState({})
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [confirmando, setConfirmando] = useState(false)
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
+  const campo = (k, etiqueta, props = {}) => (
+    <label style={{ display: 'grid', gap: 4 }}>
+      <span className="muted">{etiqueta}</span>
+      <input value={f[k]} onChange={set(k)} {...props} />
+      {errores[k] && <div className="err">{errores[k]}</div>}
+    </label>
+  )
+
+  async function guardar(e) {
+    e.preventDefault()
+    setMsg('')
+    const r = validarProducto(f)
+    setErrores(r.errores)
+    if (!r.ok) return
+    const v = r.valores
+    setBusy(true)
+    const { error } = await supabase.rpc('editar_producto', {
+      p_id: producto.id, p_codigo: v.codigo, p_nombre: v.nombre, p_unidad: v.unidad,
+      p_categoria: v.categoria, p_stock: v.stock, p_minimo: v.stock_minimo,
+    })
+    setBusy(false)
+    if (error) setMsg(error.message)
+    else onCambio('Producto actualizado.')
+  }
+
+  async function eliminar() {
+    setBusy(true); setMsg('')
+    const { data, error } = await supabase.rpc('eliminar_producto', { p_id: producto.id })
+    setBusy(false)
+    if (error) { setMsg(error.message); return }
+    onCambio(data === 'archivado'
+      ? `"${producto.nombre}" tenía historial: quedó archivado (podés reactivarlo desde "archivados").`
+      : `"${producto.nombre}" se eliminó.`)
+  }
+
+  async function reactivar() {
+    setBusy(true); setMsg('')
+    const { error } = await supabase.from('productos').update({ activo: true }).eq('id', producto.id)
+    setBusy(false)
+    if (error) setMsg(error.message)
+    else onCambio('Producto reactivado.')
+  }
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()}>
+      <form className="stack" onSubmit={guardar}>
+        <b>Editar producto {archivado && <span className="pill warn">archivado</span>}</b>
+        {campo('codigo', 'Código')}
+        {campo('nombre', 'Nombre')}
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span className="muted">Unidad</span>
+          <select value={f.unidad} onChange={set('unidad')}>
+            {UNIDADES.map((u) => <option key={u} value={u}>{ETIQUETA[u]}</option>)}
+          </select>
+          {errores.unidad && <div className="err">{errores.unidad}</div>}
+        </label>
+        {campo('categoria', 'Categoría')}
+        {campo('stock', `Stock del sistema (${f.unidad})`, {
+          inputMode: f.unidad === 'un' ? 'numeric' : 'decimal', disabled: conteoAbierto,
+        })}
+        {conteoAbierto && <span className="muted">El stock del sistema no se puede cambiar mientras hay un conteo abierto: se fijó al iniciarlo.</span>}
+        {campo('stock_minimo', 'Stock mínimo', { inputMode: 'decimal' })}
+        {msg && <div className="err">{msg}</div>}
+        <button className="primary" disabled={busy}>Guardar cambios</button>
+        {archivado && <button type="button" disabled={busy} onClick={reactivar}>Reactivar producto</button>}
+        {!archivado && !confirmando && (
+          <button type="button" className="danger" disabled={busy} onClick={() => setConfirmando(true)}>Eliminar producto</button>
+        )}
+        {!archivado && confirmando && (
+          <div className="card stack" style={{ margin: 0 }}>
+            <b>¿Eliminar "{producto.nombre}"?</b>
+            <span className="muted">{AVISO_ELIMINAR}</span>
+            <button type="button" className="danger" disabled={busy} onClick={eliminar}>Sí, eliminar</button>
+            <button type="button" disabled={busy} onClick={() => setConfirmando(false)}>No, volver</button>
+          </div>
+        )}
+        <button type="button" onClick={onClose}>Cancelar</button>
+      </form>
+      </div>
+    </div>
   )
 }
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../supabase'
-import { contados as contadosDe, diferencias, reposicion, sinContar as sinContarDe } from '../lib/conteo'
+import { contados as contadosDe, diferencias, puedeExportar, reposicion, sinContar as sinContarDe } from '../lib/conteo'
 
 const num = (v) => (v == null ? 0 : Number(v))
 const fmt = (v) => (Number.isInteger(num(v)) ? String(num(v)) : num(v).toFixed(3).replace(/0+$/, ''))
@@ -12,6 +12,7 @@ export default function Reportes() {
   const [rows, setRows] = useState([])
   const [vista, setVista] = useState('dif')
   const [msg, setMsg] = useState('')
+  const [confirmandoCierre, setConfirmandoCierre] = useState(false)
 
   useEffect(() => {
     supabase.from('conteos').select('*').order('created_at', { ascending: false }).then(({ data }) => {
@@ -33,7 +34,10 @@ export default function Reportes() {
   const difs = useMemo(() => diferencias(rows), [rows])
   const reponer = useMemo(() => reposicion(rows), [rows])
 
+  const exportable = puedeExportar(rows)
+
   function exportar() {
+    if (!exportable.ok) return
     const wb = XLSX.utils.book_new()
     const resultado = contados.map((r) => ({
       codigo: r.codigo, nombre: r.nombre, unidad: r.unidad, stock_sistema: r.stock_sistema,
@@ -48,10 +52,7 @@ export default function Reportes() {
   }
 
   async function cerrar() {
-    const aviso = sinContar.length
-      ? `Quedan ${sinContar.length} productos sin contar (conservan su stock actual).\n\n`
-      : ''
-    if (!confirm(`${aviso}¿Cerrar el conteo? Lo contado pasa a ser el stock base de la app.`)) return
+    setConfirmandoCierre(false)
     const { error } = await supabase.rpc('cerrar_conteo', { p_conteo: id })
     if (error) { setMsg(error.message); return }
     const { data } = await supabase.from('conteos').select('*').order('created_at', { ascending: false })
@@ -74,9 +75,23 @@ export default function Reportes() {
         </div>
         <div className="row">
           <button className="grow" onClick={load}>Actualizar</button>
-          <button className="grow primary" onClick={exportar}>Exportar Excel</button>
+          <button className="grow primary" onClick={exportar} disabled={!exportable.ok}>Exportar Excel</button>
         </div>
-        {conteo?.estado === 'abierto' && <button className="danger" onClick={cerrar}>Cerrar conteo</button>}
+        {!exportable.ok && <div className="muted">{exportable.motivo}</div>}
+        {conteo?.estado === 'abierto' && !confirmandoCierre && (
+          <button className="danger" onClick={() => setConfirmandoCierre(true)}>Cerrar conteo</button>
+        )}
+        {conteo?.estado === 'abierto' && confirmandoCierre && (
+          <div className="card stack" style={{ margin: 0 }}>
+            <b>¿Cerrar el conteo?</b>
+            <span className="muted">
+              {sinContar.length > 0 && `Quedan ${sinContar.length} productos sin contar (conservan su stock actual). `}
+              Lo contado pasa a ser el stock base de la app y ya no se podrán cargar más cantidades.
+            </span>
+            <button className="danger" onClick={cerrar}>Sí, cerrar conteo</button>
+            <button onClick={() => setConfirmandoCierre(false)}>No, volver</button>
+          </div>
+        )}
         {msg && <div className="muted">{msg}</div>}
       </div>
 

@@ -1,4 +1,34 @@
 import { UNIDADES, parseNumero } from './unidades'
+import { norm } from './conteo'
+
+// Fila de la tabla productos → textos para el formulario de edición.
+export function aFormulario(p) {
+  return {
+    codigo: p.codigo ?? '',
+    nombre: p.nombre ?? '',
+    unidad: p.unidad ?? 'un',
+    categoria: p.categoria ?? '',
+    stock: p.stock_actual == null ? '' : String(Number(p.stock_actual)),
+    stock_minimo: p.stock_minimo == null ? '' : String(Number(p.stock_minimo)),
+  }
+}
+
+// Lista de productos de la pestaña Productos.
+// archivados: false = solo activos · true = solo archivados.
+export function filtrarProductos(productos, { q = '', unidad = 'todas', archivados = false, limit = 100 } = {}) {
+  const t = norm(q)
+  return productos.filter((p) => {
+    if (Boolean(p.activo === false) !== archivados) return false
+    if (unidad !== 'todas' && p.unidad !== unidad) return false
+    if (!t) return true
+    return norm(p.nombre).includes(t) || norm(p.codigo).includes(t)
+  }).slice(0, limit)
+}
+
+// Mensaje de confirmación antes de eliminar.
+export const AVISO_ELIMINAR =
+  'Si el producto nunca se contó se borra definitivamente. Si ya participó en algún conteo se archiva: ' +
+  'deja de aparecer en los conteos nuevos, pero se conservan los conteos anteriores y se puede reactivar.'
 
 // Valida el formulario de producto nuevo. f contiene textos tal como se escribieron.
 // Devuelve { ok, errores: { campo: mensaje }, valores } con los números ya convertidos.

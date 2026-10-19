@@ -242,7 +242,68 @@ begin
   return v_id;
 end $$;
 
+-- Edición de un producto (solo admin). Reglas: código único, la unidad no cambia si ya tiene
+-- cantidades contadas y el stock del sistema no se toca con un conteo abierto.
+create function public.editar_producto(
+  p_id uuid, p_codigo text, p_nombre text, p_unidad text, p_categoria text,
+  p_stock numeric, p_minimo numeric
+) returns void
+language plpgsql security definer set search_path = public as $$
+declare v productos%rowtype;
+begin
+  if not is_admin() then raise exception 'Solo el administrador puede editar productos'; end if;
+  select * into v from productos where id = p_id;
+  if not found then raise exception 'El producto no existe'; end if;
+  if nullif(trim(p_codigo), '') is null or nullif(trim(p_nombre), '') is null then
+    raise exception 'Código y nombre son obligatorios';
+  end if;
+  if p_unidad not in ('un','kg','lt') then raise exception 'Unidad inválida'; end if;
+  if coalesce(p_stock,0) < 0 or coalesce(p_minimo,0) < 0 then
+    raise exception 'Los valores no pueden ser negativos';
+  end if;
+  if p_unidad = 'un' and coalesce(p_stock,0) <> trunc(coalesce(p_stock,0)) then
+    raise exception 'Las unidades se cargan en números enteros';
+  end if;
+  if exists (select 1 from productos where codigo = trim(p_codigo) and id <> p_id) then
+    raise exception 'Ya existe otro producto con ese código';
+  end if;
+  if p_unidad <> v.unidad and exists (select 1 from conteo_movimientos where producto_id = p_id) then
+    raise exception 'No se puede cambiar la unidad: el producto ya tiene cantidades contadas';
+  end if;
+  if coalesce(p_stock,0) <> v.stock_actual and exists (select 1 from conteos where estado = 'abierto') then
+    raise exception 'El stock del sistema no se puede modificar con un conteo abierto';
+  end if;
+  update productos set
+    codigo = trim(p_codigo), nombre = trim(p_nombre), unidad = p_unidad,
+    categoria = nullif(trim(p_categoria), ''),
+    stock_actual = coalesce(p_stock,0), stock_minimo = coalesce(p_minimo,0)
+  where id = p_id;
+end $$;
+
+-- Nunca contado → se borra. Con historial → se archiva (activo = false). Devuelve 'eliminado' o 'archivado'.
+create function public.eliminar_producto(p_id uuid) returns text
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_admin() then raise exception 'Solo el administrador puede eliminar productos'; end if;
+  if not exists (select 1 from productos where id = p_id) then raise exception 'El producto no existe'; end if;
+
+  -- Si hay un conteo abierto y el producto todavía no tiene cargas ahí, se lo saca de ese conteo
+  delete from conteo_base b using conteos c
+  where b.conteo_id = c.id and c.estado = 'abierto' and b.producto_id = p_id
+    and not exists (select 1 from conteo_movimientos m where m.conteo_id = b.conteo_id and m.producto_id = p_id);
+
+  if exists (select 1 from conteo_base where producto_id = p_id)
+     or exists (select 1 from conteo_movimientos where producto_id = p_id) then
+    update productos set activo = false where id = p_id;
+    return 'archivado';
+  end if;
+  delete from productos where id = p_id;
+  return 'eliminado';
+end $$;
+
 revoke execute on all functions in schema public from public, anon;
+grant execute on function public.editar_producto(uuid,text,text,text,text,numeric,numeric) to authenticated;
+grant execute on function public.eliminar_producto(uuid) to authenticated;
 grant execute on function public.crear_producto(text,text,text,text,numeric,numeric) to authenticated;
 revoke execute on function public.handle_new_user() from authenticated;
 grant execute on function public.is_active() to authenticated;

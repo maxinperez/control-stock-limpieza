@@ -36,6 +36,15 @@ export function filtrar(view, { q = '', filtro = 'todos', unidad = 'todas', limi
   }).slice(0, limit)
 }
 
+// El Excel de resultado solo tiene sentido si se contó al menos un producto.
+export function puedeExportar(rows) {
+  if (!rows.length) return { ok: false, motivo: 'Este conteo no tiene productos.' }
+  if (!rows.some((r) => num(r.movimientos) > 0)) {
+    return { ok: false, motivo: 'Todavía no se contó ningún producto: no hay nada para exportar.' }
+  }
+  return { ok: true, motivo: '' }
+}
+
 export const contados = (rows) => rows.filter((r) => num(r.movimientos) > 0)
 export const sinContar = (rows) => rows.filter((r) => num(r.movimientos) === 0)
 

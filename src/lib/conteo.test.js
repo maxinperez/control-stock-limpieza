@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diferencias, filtrar, mergePendientes, progreso, reposicion, sinContar } from './conteo'
+import { diferencias, filtrar, mergePendientes, progreso, puedeExportar, reposicion, sinContar } from './conteo'
 
 const row = (o = {}) => ({
   producto_id: 'p1', codigo: 'A1', barcode: null, nombre: 'Esponja', unidad: 'un',
@@ -67,6 +67,30 @@ describe('filtrar', () => {
   })
 
   it('respeta el límite', () => expect(filtrar(datos, { limit: 2 })).toHaveLength(2))
+})
+
+describe('puedeExportar', () => {
+  // Clases: sin productos · productos pero ninguno contado · al menos uno contado (límite: exactamente uno) · todos contados
+  it('conteo sin productos: no se puede', () => {
+    const r = puedeExportar([])
+    expect(r.ok).toBe(false)
+    expect(r.motivo).toBeTruthy()
+  })
+  it('hay productos pero ninguno contado: no se puede', () => {
+    const r = puedeExportar([row({ movimientos: 0 }), row({ producto_id: 'p2', movimientos: 0 })])
+    expect(r.ok).toBe(false)
+    expect(r.motivo).toMatch(/ningún producto/)
+  })
+  it('exactamente un producto contado: sí se puede (límite)', () => {
+    expect(puedeExportar([row({ movimientos: 1 }), row({ producto_id: 'p2', movimientos: 0 })]).ok).toBe(true)
+  })
+  it('todos contados: sí se puede', () => {
+    expect(puedeExportar([row({ movimientos: 2 }), row({ producto_id: 'p2', movimientos: 1 })]).ok).toBe(true)
+  })
+  it('movimientos que llegan como texto desde la base', () => {
+    expect(puedeExportar([row({ movimientos: '0' })]).ok).toBe(false)
+    expect(puedeExportar([row({ movimientos: '3' })]).ok).toBe(true)
+  })
 })
 
 describe('diferencias y sinContar', () => {

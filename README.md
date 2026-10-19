@@ -18,6 +18,7 @@ Acá cada carga **se suma** al total del producto y queda guardada con su autor 
 - **Progreso:** muestra cuántos productos faltan contar y permite filtrar por pendientes, contados y por tipo de unidad.
 - **Modo sin conexión:** si no hay señal en el depósito, las cargas se guardan en el teléfono y se envían solas al volver la conexión.
 - **Importar productos** desde una planilla (Excel o CSV) o **cargarlos a mano** uno por uno.
+- **Editar y eliminar productos** (solo administrador): se corrige código, nombre, unidad, categoría, stock y mínimo. Un producto que nunca se contó se borra; uno con historial se **archiva** (no aparece en conteos nuevos, conserva los anteriores y se puede reactivar).
 - **Alta rápida:** durante el conteo, cualquier persona puede dar de alta un producto que está en el local pero no en la planilla. Queda marcado para cargarlo después en el sistema principal.
 - **Reportes** (solo administrador): diferencias entre lo contado y el sistema, productos sin contar y productos a reponer (en o bajo el stock mínimo).
 - **Exportar a Excel** el resultado, con una hoja de ajustes lista para cargar en el sistema principal.
@@ -31,6 +32,8 @@ Acá cada carga **se suma** al total del producto y queda guardada con su autor 
 4. **Revisar:** en *Reportes* el administrador ve las diferencias y qué falta contar.
 5. **Exportar y cerrar:** se descarga el Excel con los ajustes y se cierra el conteo. Lo contado pasa a ser el stock base de la app para el próximo conteo.
 6. El administrador carga los ajustes en el sistema principal.
+
+Reglas al editar un producto: el código no puede repetirse; la unidad no se cambia si el producto ya tiene cantidades contadas; y el stock del sistema no se modifica mientras hay un conteo abierto (se fijó al iniciarlo). Si se elimina un producto durante un conteo y todavía no tenía cargas ahí, también se lo saca de ese conteo.
 
 Solo puede haber un conteo abierto a la vez, y no se puede importar ni crear productos a mano mientras haya uno abierto (para eso está la alta rápida).
 
@@ -53,7 +56,7 @@ Los encabezados se reconocen sin importar mayúsculas ni tildes, y admiten sinó
 |---|---|---|
 | Ver productos y conteo | Sí | Sí |
 | Sumar cantidades y dar de alta productos durante el conteo | Sí | Sí |
-| Importar / crear productos, iniciar y cerrar conteos | No | Sí |
+| Importar / crear / editar / eliminar productos, iniciar y cerrar conteos | No | Sí |
 | Ver reportes y exportar | No | Sí |
 | Crear y desactivar usuarios | No | Sí |
 
