@@ -356,17 +356,32 @@ begin
   return 'eliminado';
 end $$;
 
--- Abre un conteo de UN producto escrito a mano (solo admin). Es el flujo que usa la app hoy.
-create function public.abrir_conteo(p_producto text) returns uuid
+-- Abre un conteo con 1 a 10 productos escritos a mano (solo admin). Es el flujo que usa la app hoy.
+-- max_productos del conteo queda igual a la cantidad elegida.
+create function public.abrir_conteo(p_productos text[]) returns uuid
 language plpgsql security definer set search_path = public as $$
 declare
   v_id uuid := gen_random_uuid();
   v_prod uuid;
-  v_nombre text := trim(coalesce(p_producto, ''));
+  v_nombres text[];
+  v_nombre text;
+  v_n int;
 begin
   if not is_admin() then raise exception 'Solo el administrador puede abrir un conteo'; end if;
-  if v_nombre = '' then raise exception 'Escribí qué vas a contar'; end if;
-  if length(v_nombre) > 60 then raise exception 'El nombre puede tener hasta 60 caracteres'; end if;
+
+  select coalesce(array_agg(trim(x)), '{}') into v_nombres from unnest(coalesce(p_productos, '{}')) x;
+  v_n := cardinality(v_nombres);
+  if v_n < 1 then raise exception 'Escribí qué vas a contar'; end if;
+  if v_n > 10 then raise exception 'Se pueden contar hasta 10 productos por conteo'; end if;
+  if exists (select 1 from unnest(v_nombres) x where x is null or x = '') then
+    raise exception 'Escribí el nombre de cada producto';
+  end if;
+  if exists (select 1 from unnest(v_nombres) x where length(x) > 60) then
+    raise exception 'Cada nombre puede tener hasta 60 caracteres';
+  end if;
+  if (select count(distinct lower(regexp_replace(x, '\s+', ' ', 'g'))) from unnest(v_nombres) x) < v_n then
+    raise exception 'Hay nombres repetidos';
+  end if;
   if exists (select 1 from conteos where estado = 'abierto') then
     raise exception 'Ya hay un conteo abierto: cerralo antes de abrir otro';
   end if;
@@ -376,15 +391,17 @@ begin
     v_id,
     'Conteo ' || to_char(now() at time zone 'America/Argentina/Buenos_Aires', 'DD/MM/YYYY')
       || ' · ' || upper(substr(v_id::text, 1, 6)),
-    auth.uid(), 1
+    auth.uid(), v_n
   );
 
-  insert into productos (codigo, nombre, unidad, stock_actual, origen, activo)
-  values ('CNT-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8)),
-          v_nombre, 'un', 0, 'conteo', false)
-  returning id into v_prod;
+  foreach v_nombre in array v_nombres loop
+    insert into productos (codigo, nombre, unidad, stock_actual, origen, activo)
+    values ('CNT-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8)),
+            v_nombre, 'un', 0, 'conteo', false)
+    returning id into v_prod;
+    insert into conteo_base (conteo_id, producto_id, stock_sistema) values (v_id, v_prod, 0);
+  end loop;
 
-  insert into conteo_base (conteo_id, producto_id, stock_sistema) values (v_id, v_prod, 0);
   return v_id;
 end $$;
 
@@ -419,7 +436,7 @@ create trigger conteo_movimientos_validar
 
 revoke execute on all functions in schema public from public, anon;
 revoke execute on function public.validar_movimiento() from authenticated;
-grant execute on function public.abrir_conteo(text) to authenticated;
+grant execute on function public.abrir_conteo(text[]) to authenticated;
 grant execute on function public.editar_producto(uuid,text,text,text,text,numeric,numeric) to authenticated;
 grant execute on function public.eliminar_producto(uuid) to authenticated;
 grant execute on function public.crear_producto(text,text,text,text,numeric,numeric) to authenticated;

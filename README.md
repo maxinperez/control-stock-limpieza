@@ -12,7 +12,7 @@ Acá cada carga **se suma** (o se resta) al total y queda guardada. Se puede cor
 
 ## Qué hace
 
-- **Un producto por conteo, escrito a mano:** el administrador abre el conteo escribiendo qué se va a contar, con el nombre que él entienda (por ejemplo "esp rosa"). Contar de a un producto evita errores.
+- **Productos escritos a mano:** el administrador abre el conteo escribiendo qué se va a contar, con el nombre que él entienda (por ejemplo "esp rosa"). Por defecto es **un producto por conteo**, porque contar de a uno evita errores, pero al abrir puede elegir **hasta 10**.
 - **Sumar y restar:** cada persona carga lo que contó (+20) o corrige si contó de más (−5). Solo **enteros positivos**, y el total **nunca puede quedar negativo** (la base lo impide aunque dos personas resten a la vez).
 - **Varios usuarios a la vez:** lo que suma una persona lo ven las demás casi al instante.
 - **Modo sin conexión:** si no hay señal, las cargas se guardan en el teléfono y se envían solas al volver la conexión. Si alguna la rechaza la base (por ejemplo, el conteo ya se cerró), se avisa y no traba al resto.
@@ -20,17 +20,17 @@ Acá cada carga **se suma** (o se resta) al total y queda guardada. Se puede cor
 
 ## Cómo se usa
 
-1. **Abrir:** el administrador escribe qué se va a contar (hasta 60 caracteres) y toca **Abrir conteo**. Solo puede haber un conteo abierto a la vez.
-2. **Contar:** todos ven el producto y el total parcial. Escriben la cantidad (o usan +1 / +5 / +10) y tocan **Sumar** o **Restar**.
+1. **Abrir:** el administrador elige cuántos productos va a contar (1 por defecto, hasta 10), escribe el nombre de cada uno (hasta 60 caracteres, sin repetir) y toca **Abrir conteo**. Solo puede haber un conteo abierto a la vez.
+2. **Contar:** todos ven cada producto con su total parcial. Escriben la cantidad (o usan +1 / +5 / +10) y tocan **Sumar** o **Restar**.
 3. **Cerrar:** el administrador toca **Cerrar conteo** y confirma. Conviene avisar antes a los demás que dejen de contar.
-4. **Revisar y pasar:** la pantalla muestra el último conteo cerrado con su total. Ese número se carga a mano en el sistema principal.
+4. **Revisar y pasar:** la pantalla muestra el último conteo cerrado con el total de cada producto. Esos números se cargan a mano en el sistema principal. Si un producto terminó en 0 (por ejemplo, se sumó y restó lo mismo), se considera no contado; si ninguno tiene cantidad, dice "No se realizó ningún conteo".
 5. **Reiniciar:** al abrir un conteo nuevo, el anterior deja de mostrarse.
 
 No hay historial visible en la app, pero **todos los conteos quedan guardados en la base**, lo que deja lugar a mejoras futuras (recopilar conteos, recordar productos que se cuentan seguido, etc.).
 
-### Preparado para varios productos
+### Cuántos productos por conteo
 
-Cada conteo tiene un máximo de productos (`conteos.max_productos`, hoy siempre 1). La pantalla ya muestra un bloque por producto y la base rechaza agregar más de los permitidos, así que permitir N productos el día de mañana es cambiar ese valor y agregar la forma de sumar productos al conteo.
+Al abrir, `abrir_conteo` recibe la lista de nombres (de 1 a 10) y guarda la cantidad en `conteos.max_productos`. La base rechaza listas vacías, de más de 10, nombres vacíos o de más de 60 caracteres y nombres repetidos (sin distinguir mayúsculas ni espacios), y no deja agregar productos por encima del máximo. Para cambiar el tope de 10 hay que ajustarlo en `abrir_conteo` y en `MAX_PRODUCTOS_POR_CONTEO` (`src/lib/conteo.js`).
 
 ### Pantallas ocultas por ahora
 

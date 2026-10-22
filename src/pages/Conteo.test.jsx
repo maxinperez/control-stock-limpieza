@@ -46,6 +46,12 @@ async function escribir(el, valor) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
   await act(async () => { setter.call(el, valor); el.dispatchEvent(new Event('input', { bubbles: true })) })
 }
+async function elegirCantidad(n) {
+  const sel = contenedor.querySelector('select[aria-label="Cantidad de productos"]')
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+  await act(async () => { setter.call(sel, String(n)); sel.dispatchEvent(new Event('change', { bubbles: true })) })
+}
+const inputsNombre = () => [...contenedor.querySelectorAll('form input')]
 const click = async (texto) => { await act(async () => boton(texto).click()); await act(async () => {}) }
 const cargasEnviadas = () => mockUpsert.mock.calls.flatMap(([filas]) => filas.map((f) => f.cantidad))
 
@@ -106,7 +112,7 @@ describe('Conteo · sin conteo abierto', () => {
     await montar()
     await escribir(input('Ej: esp rosa'), '  esp rosa  ')
     await click('Abrir conteo')
-    expect(supabase.rpc).toHaveBeenCalledWith('abrir_conteo', { p_producto: 'esp rosa' })
+    expect(supabase.rpc).toHaveBeenCalledWith('abrir_conteo', { p_productos: ['esp rosa'] })
   })
 
   it('si la base rechaza la apertura, se muestra el motivo', async () => {
@@ -115,6 +121,57 @@ describe('Conteo · sin conteo abierto', () => {
     await escribir(input('Ej: esp rosa'), 'esp rosa')
     await click('Abrir conteo')
     expect(contenedor.textContent).toMatch(/Ya hay un conteo abierto/)
+  })
+
+  it('por defecto se cuenta 1 producto', async () => {
+    await montar()
+    expect(contenedor.querySelector('select[aria-label="Cantidad de productos"]').value).toBe('1')
+    expect(inputsNombre()).toHaveLength(1)
+  })
+
+  it('elegir 3 productos muestra 3 campos y los envía en orden', async () => {
+    await montar()
+    await elegirCantidad(3)
+    expect(inputsNombre()).toHaveLength(3)
+    await escribir(inputsNombre()[0], 'esp rosa')
+    await escribir(inputsNombre()[1], ' rej azul ')
+    await escribir(inputsNombre()[2], 'trapo')
+    await click('Abrir conteo')
+    expect(supabase.rpc).toHaveBeenCalledWith('abrir_conteo', { p_productos: ['esp rosa', 'rej azul', 'trapo'] })
+  })
+
+  it('el selector ofrece de 1 a 10 productos', async () => {
+    await montar()
+    const opciones = [...contenedor.querySelectorAll('select[aria-label="Cantidad de productos"] option')].map((o) => o.value)
+    expect(opciones).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'])
+  })
+
+  it('bajar la cantidad conserva lo ya escrito en los primeros', async () => {
+    await montar()
+    await elegirCantidad(3)
+    await escribir(inputsNombre()[0], 'esp rosa')
+    await escribir(inputsNombre()[1], 'rej azul')
+    await elegirCantidad(2)
+    expect(inputsNombre().map((i) => i.value)).toEqual(['esp rosa', 'rej azul'])
+  })
+
+  it('nombres repetidos (aunque cambien mayúsculas) no se envían', async () => {
+    await montar()
+    await elegirCantidad(2)
+    await escribir(inputsNombre()[0], 'Esp Rosa')
+    await escribir(inputsNombre()[1], 'esp rosa')
+    await click('Abrir conteo')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(contenedor.textContent).toMatch(/Este nombre está repetido/)
+  })
+
+  it('con varios, un nombre vacío marca ese campo y no se envía', async () => {
+    await montar()
+    await elegirCantidad(2)
+    await escribir(inputsNombre()[0], 'esp rosa')
+    await click('Abrir conteo')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(contenedor.textContent).toMatch(/Escribí qué vas a contar/)
   })
 
   it('un contador no puede abrir conteos', async () => {
@@ -202,6 +259,20 @@ describe('Conteo · con un conteo abierto', () => {
     await click('Cerrar conteo')
     expect(contenedor.textContent).toMatch(/No se contó nada/)
     expect(contenedor.textContent).not.toMatch(/esp rosa: 0/)
+  })
+
+  it('con 2 productos: una tarjeta por producto, cada una suma al suyo y el cierre lista ambos', async () => {
+    resp.resumen.c1 = [fila({ contado: 15, movimientos: 2 }), fila({ producto_id: 'p2', nombre: 'rej azul', contado: 4, movimientos: 1 })]
+    await montar()
+    const cantidades = [...contenedor.querySelectorAll('input[placeholder="Cantidad"]')]
+    expect(cantidades).toHaveLength(2)
+    await escribir(cantidades[1], '3')
+    const sumar = [...contenedor.querySelectorAll('button')].filter((b) => b.textContent.includes('Sumar'))
+    await act(async () => sumar[1].click()); await act(async () => {})
+    expect(mockUpsert.mock.calls[0][0][0]).toMatchObject({ producto_id: 'p2', cantidad: 3 })
+    await click('Cerrar conteo')
+    expect(contenedor.textContent).toMatch(/esp rosa: 15/)
+    expect(contenedor.textContent).toMatch(/rej azul: 4/)
   })
 
   it('si la base rechaza una carga (p. ej. otro restó antes), se avisa y se puede descartar el aviso', async () => {

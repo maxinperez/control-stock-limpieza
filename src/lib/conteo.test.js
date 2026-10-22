@@ -2,8 +2,42 @@ import { describe, expect, it } from 'vitest'
 import {
   diferencias, filtrar, mergePendientes, opcionContinuar, progreso, puedeExportar, reposicion, sinContar,
   textoCierreHecho, textoConfirmarCierre, textoContinuar, validarMovimiento, validarNombreProducto,
-  conCantidad,
+  conCantidad, validarNombresProductos,
 } from './conteo'
+
+describe('validarNombresProductos (abrir un conteo con 1 a 10 productos)', () => {
+  // Clases de cantidad: 0 · 1 (mínimo) · 10 (máximo) · 11 · no es lista
+  // Clases de nombres: todos válidos · uno vacío · uno largo · repetido exacto · repetido por mayúsculas/espacios
+  const varios = (n) => Array.from({ length: n }, (_, i) => `prod ${i + 1}`)
+
+  it('lista vacía es inválida', () => expect(validarNombresProductos([]).error).toMatch(/Escribí/))
+  it('algo que no es una lista se trata como vacía', () => expect(validarNombresProductos(undefined).ok).toBe(false))
+  it('un solo producto (mínimo) es válido y se recorta', () => {
+    expect(validarNombresProductos(['  esp rosa '])).toEqual({ ok: true, nombres: ['esp rosa'], errores: [null] })
+  })
+  it('diez productos (máximo) es válido', () => expect(validarNombresProductos(varios(10)).nombres).toHaveLength(10))
+  it('once productos es inválido', () => expect(validarNombresProductos(varios(11)).error).toMatch(/hasta 10/))
+  it('un nombre vacío marca solo esa posición', () => {
+    const r = validarNombresProductos(['esp rosa', '  ', 'rej azul'])
+    expect(r.ok).toBe(false)
+    expect(r.errores[0]).toBeNull()
+    expect(r.errores[1]).toMatch(/Escribí/)
+    expect(r.errores[2]).toBeNull()
+  })
+  it('un nombre de más de 60 caracteres es inválido', () => {
+    expect(validarNombresProductos(['ok', 'x'.repeat(61)]).errores[1]).toMatch(/60/)
+  })
+  it('repetido exacto: se marca el segundo', () => {
+    const r = validarNombresProductos(['esp rosa', 'esp rosa'])
+    expect(r.errores).toEqual([null, 'Este nombre está repetido'])
+  })
+  it('repetido con otras mayúsculas o espacios también cuenta', () => {
+    expect(validarNombresProductos(['Esp Rosa', '  esp   rosa ']).ok).toBe(false)
+  })
+  it('nombres parecidos pero distintos son válidos', () => {
+    expect(validarNombresProductos(['esp rosa', 'esp rosada']).ok).toBe(true)
+  })
+})
 
 describe('conCantidad (qué cuenta como "contado" en el conteo simple)', () => {
   // Clases: sin cargas · cargas que suman 0 (sumó y restó lo mismo) · total positivo · total como texto · lista vacía

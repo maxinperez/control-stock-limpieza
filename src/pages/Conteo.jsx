@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../supabase'
 import { enqueue, flush, getCache, getPending, getRechazadas, limpiarRechazadas, setCache } from '../offline'
-import { MAX_NOMBRE_PRODUCTO, conCantidad, mergePendientes, validarMovimiento, validarNombreProducto } from '../lib/conteo'
+import {
+  MAX_NOMBRE_PRODUCTO, MAX_PRODUCTOS_POR_CONTEO, conCantidad, mergePendientes, validarMovimiento, validarNombresProductos,
+} from '../lib/conteo'
 
 const num = (v) => (v == null ? 0 : Number(v))
 const fecha = (iso) => (iso ? new Date(iso).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }) : '')
 
 // Conteo simple: el admin abre un conteo escribiendo qué va a contar ("esp rosa"),
 // todos suman o restan sobre el total parcial, y al cerrarlo queda visible para revisar
-// hasta que se abre el siguiente. Cada conteo admite conteos.max_productos productos (hoy, 1).
+// hasta que se abre el siguiente. Al abrir se elige cuántos productos (1 a 10, por defecto 1).
 export default function Conteo({ profile, onChange }) {
   const admin = profile.rol === 'admin'
   const [conteo, setConteo] = useState(undefined) // undefined = cargando, null = no hay abierto
@@ -134,30 +136,55 @@ function ProductoEnConteo({ row, onCargar }) {
 }
 
 function AbrirConteo({ hayAnterior, onAbierto }) {
-  const [nombre, setNombre] = useState('')
+  const [nombres, setNombres] = useState([''])
+  const [errores, setErrores] = useState([])
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
+  function cambiarCantidad(n) {
+    // Conserva lo ya escrito al subir o bajar la cantidad
+    setNombres((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? ''))
+    setErrores([]); setErr('')
+  }
+  function cambiarNombre(i, valor) {
+    setNombres((prev) => prev.map((x, j) => (j === i ? valor : x)))
+    setErrores((prev) => prev.map((x, j) => (j === i ? null : x))); setErr('')
+  }
+
   async function abrir(e) {
     e.preventDefault()
-    const v = validarNombreProducto(nombre)
-    if (!v.ok) { setErr(v.error); return }
+    const v = validarNombresProductos(nombres)
+    setErrores(v.errores ?? [])
+    if (!v.ok) { setErr(v.error ?? ''); return }
     setBusy(true); setErr('')
-    const { error } = await supabase.rpc('abrir_conteo', { p_producto: v.nombre })
+    const { error } = await supabase.rpc('abrir_conteo', { p_productos: v.nombres })
     setBusy(false)
     if (error) { setErr(error.message); return }
-    setNombre('')
+    setNombres(['']); setErrores([])
     onAbierto()
   }
 
+  const varios = nombres.length > 1
   return (
     <form className="card stack" onSubmit={abrir}>
       <b>Nuevo conteo</b>
       <label style={{ display: 'grid', gap: 4 }}>
-        <span className="muted">¿Qué vas a contar?</span>
-        <input placeholder="Ej: esp rosa" value={nombre} maxLength={MAX_NOMBRE_PRODUCTO}
-          onChange={(e) => { setNombre(e.target.value); setErr('') }} />
+        <span className="muted">¿Cuántos productos vas a contar?</span>
+        <select aria-label="Cantidad de productos" value={nombres.length} onChange={(e) => cambiarCantidad(Number(e.target.value))}>
+          {Array.from({ length: MAX_PRODUCTOS_POR_CONTEO }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>{n === 1 ? '1 producto' : `${n} productos`}</option>
+          ))}
+        </select>
       </label>
+      {nombres.map((nombre, i) => (
+        <label key={i} style={{ display: 'grid', gap: 4 }}>
+          <span className="muted">{varios ? `Producto ${i + 1}` : '¿Qué vas a contar?'}</span>
+          <input placeholder={i === 0 ? 'Ej: esp rosa' : `Producto ${i + 1}`} value={nombre} maxLength={MAX_NOMBRE_PRODUCTO}
+            onChange={(e) => cambiarNombre(i, e.target.value)} />
+          {errores[i] && <div className="err">{errores[i]}</div>}
+        </label>
+      ))}
+      {varios && <span className="muted">Contar de a un producto ayuda a evitar errores.</span>}
       {hayAnterior && <span className="muted">Al abrir un conteo nuevo, el anterior deja de mostrarse.</span>}
       {err && <div className="err">{err}</div>}
       <button className="primary" disabled={busy}>Abrir conteo</button>

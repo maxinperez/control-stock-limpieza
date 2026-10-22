@@ -15,6 +15,34 @@ export function validarNombreProducto(texto) {
   return { ok: true, nombre }
 }
 
+export const MAX_PRODUCTOS_POR_CONTEO = 10
+
+// Clave para detectar nombres repetidos: sin distinguir mayúsculas ni espacios de más.
+const claveNombre = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+
+// Lista de nombres para abrir un conteo (de 1 a MAX_PRODUCTOS_POR_CONTEO).
+// Devuelve { ok, nombres, errores } con un mensaje por posición (o null), y `error` si el problema es la lista.
+export function validarNombresProductos(textos) {
+  const lista = Array.isArray(textos) ? textos : []
+  if (lista.length < 1) return { ok: false, error: 'Escribí qué vas a contar', errores: [] }
+  if (lista.length > MAX_PRODUCTOS_POR_CONTEO) {
+    return { ok: false, error: `Se pueden contar hasta ${MAX_PRODUCTOS_POR_CONTEO} productos por conteo`, errores: [] }
+  }
+  const vistos = new Set()
+  const nombres = []
+  const errores = lista.map((t) => {
+    const v = validarNombreProducto(t)
+    if (!v.ok) return v.error
+    const clave = claveNombre(v.nombre)
+    if (vistos.has(clave)) return 'Este nombre está repetido'
+    vistos.add(clave)
+    nombres.push(v.nombre)
+    return null
+  })
+  const ok = errores.every((e) => e === null)
+  return ok ? { ok, nombres, errores } : { ok, errores }
+}
+
 // Productos con algo contado en el conteo simple. Como no se puede cargar 0, un total de 0
 // solo sale de sumar y restar lo mismo: equivale a no haber contado.
 export const conCantidad = (rows) => rows.filter((r) => num(r.contado) > 0)
