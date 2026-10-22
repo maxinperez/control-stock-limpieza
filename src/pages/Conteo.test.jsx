@@ -2,17 +2,20 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Respuestas simuladas de Supabase: no hay conteo abierto; "ultimo" es el último cerrado.
-const resp = { ultimo: null, contados: 0 }
+// Respuestas simuladas de Supabase.
+//   abierto: conteo abierto (o null) · ultimo: último cerrado · resumen: filas de conteo_resumen por conteo
+//   upsert: resultado de enviar cargas
+const resp = { abierto: null, ultimo: null, resumen: {}, upsert: { error: null } }
+const mockUpsert = vi.fn()
 vi.mock('../supabase', () => {
-  const consulta = () => {
-    const st = { estado: null, head: false }
+  const consulta = (tabla) => {
+    const st = { estado: null, conteo: null }
     const o = {
-      select: (_cols, opts) => { st.head = Boolean(opts?.head); return o },
-      eq: (col, val) => { if (col === 'estado') st.estado = val; return o },
-      order: () => o, limit: () => o, range: () => o, gt: () => o,
-      maybeSingle: () => Promise.resolve({ data: st.estado === 'abierto' ? null : resp.ultimo, error: null }),
-      then: (ok, no) => Promise.resolve(st.head ? { count: resp.contados, error: null } : { data: [], error: null }).then(ok, no),
+      select: () => o, order: () => o, limit: () => o, range: () => o,
+      eq: (col, val) => { if (col === 'estado') st.estado = val; if (col === 'conteo_id') st.conteo = val; return o },
+      maybeSingle: () => Promise.resolve({ data: st.estado === 'abierto' ? resp.abierto : resp.ultimo, error: null }),
+      upsert: (...args) => { mockUpsert(...args); return Promise.resolve(resp.upsert) },
+      then: (ok, no) => Promise.resolve({ data: tabla === 'conteo_resumen' ? (resp.resumen[st.conteo] ?? []) : [], error: null }).then(ok, no),
     }
     return o
   }
@@ -25,7 +28,8 @@ import Conteo from './Conteo'
 
 const admin = { id: 'u1', rol: 'admin', nombre: 'admin' }
 const contador = { id: 'u2', rol: 'contador', nombre: 'juan' }
-const cerradoHoy = { id: 'c-prev', nombre: 'Conteo 18/10/2026 · AB12CD', estado: 'cerrado', cerrado_at: new Date().toISOString() }
+const abierto = { id: 'c1', nombre: 'Conteo 21/10/2026 · AB12CD', estado: 'abierto' }
+const fila = (o = {}) => ({ conteo_id: 'c1', producto_id: 'p1', nombre: 'esp rosa', unidad: 'un', contado: 0, movimientos: 0, ...o })
 
 let contenedor, raiz
 async function montar(profile = admin) {
@@ -37,86 +41,176 @@ async function montar(profile = admin) {
   await act(async () => {})
 }
 const boton = (texto) => [...contenedor.querySelectorAll('button')].find((b) => b.textContent.includes(texto))
-const radios = () => [...contenedor.querySelectorAll('input[type=radio]')]
-async function escribir(input, valor) {
+const input = (placeholder) => contenedor.querySelector(`input[placeholder="${placeholder}"]`)
+async function escribir(el, valor) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
-  await act(async () => { setter.call(input, valor); input.dispatchEvent(new Event('input', { bubbles: true })) })
+  await act(async () => { setter.call(el, valor); el.dispatchEvent(new Event('input', { bubbles: true })) })
 }
+const click = async (texto) => { await act(async () => boton(texto).click()); await act(async () => {}) }
+const cargasEnviadas = () => mockUpsert.mock.calls.flatMap(([filas]) => filas.map((f) => f.cantidad))
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  localStorage.clear()
   vi.clearAllMocks()
-  supabase.rpc.mockResolvedValue({ error: null })
-  resp.ultimo = null
-  resp.contados = 0
+  supabase.rpc.mockResolvedValue({ data: 'nuevo', error: null })
+  Object.assign(resp, { abierto: null, ultimo: null, resumen: {}, upsert: { error: null } })
 })
 afterEach(async () => {
   await act(async () => raiz.unmount())
   contenedor.remove()
 })
 
-describe('Conteo · iniciar un conteo nuevo (admin)', () => {
-  // Clases: sin conteo previo · previo sin contados · previo con contados del mismo día · previo de otro día · nombre vacío / propio · rol
+describe('Conteo · sin conteo abierto', () => {
+  // Clases: sin conteo previo · con previo cerrado (con y sin cantidades) · nombre vacío / válido / con espacios · rol
 
-  it('sin conteo previo: no hay opciones y arranca de cero con nombre automático', async () => {
+  it('admin sin conteo previo: formulario para abrir y nada para revisar', async () => {
     await montar()
-    expect(radios()).toHaveLength(0)
-    await act(async () => boton('Iniciar conteo').click())
-    expect(supabase.rpc).toHaveBeenCalledWith('iniciar_conteo', { p_nombre: null, p_continuar_de: null })
+    expect(input('Ej: esp rosa')).not.toBeNull()
+    expect(contenedor.textContent).not.toMatch(/Último conteo/)
   })
 
-  it('previo sin ningún producto contado: no se ofrece continuar', async () => {
-    resp.ultimo = cerradoHoy; resp.contados = 0
+  it('con un conteo cerrado: se ve el resultado para revisar y el aviso de que deja de mostrarse', async () => {
+    resp.ultimo = { id: 'c0', nombre: 'Conteo 20/10/2026 · AAAAAA', estado: 'cerrado', cerrado_at: '2026-10-20T18:30:00Z' }
+    resp.resumen.c0 = [fila({ conteo_id: 'c0', contado: 15, movimientos: 3 })]
     await montar()
-    expect(radios()).toHaveLength(0)
+    expect(contenedor.textContent).toMatch(/Último conteo/)
+    expect(contenedor.textContent).toMatch(/esp rosa/)
+    expect(contenedor.textContent).toMatch(/15/)
+    expect(contenedor.textContent).toMatch(/el anterior deja de mostrarse/)
   })
 
-  it('previo con contados cerrado hoy: ofrece continuar, preseleccionado, y lo envía', async () => {
-    resp.ultimo = cerradoHoy; resp.contados = 3
+  it('un conteo cerrado sin cargas se muestra como no realizado', async () => {
+    resp.ultimo = { id: 'c0', nombre: 'X', estado: 'cerrado', cerrado_at: '2026-10-20T18:30:00Z' }
+    resp.resumen.c0 = [fila({ conteo_id: 'c0' })]
     await montar()
-    expect(radios()).toHaveLength(2)
-    expect(contenedor.textContent).toMatch(/Continuar con «Conteo 18\/10\/2026 · AB12CD» \(3 productos contados\)/)
-    expect(radios()[1].checked).toBe(true)
-    await act(async () => boton('Iniciar conteo').click())
-    expect(supabase.rpc).toHaveBeenCalledWith('iniciar_conteo', { p_nombre: null, p_continuar_de: 'c-prev' })
+    expect(contenedor.textContent).toMatch(/No se realizó ningún conteo/)
   })
 
-  it('previo con contados: elegir "Empezar de cero" no continúa', async () => {
-    resp.ultimo = cerradoHoy; resp.contados = 3
+  it('sumar n y restar n (total 0) también se muestra como no realizado, sin el producto en 0', async () => {
+    resp.ultimo = { id: 'c0', nombre: 'X', estado: 'cerrado', cerrado_at: '2026-10-20T18:30:00Z' }
+    resp.resumen.c0 = [fila({ conteo_id: 'c0', contado: 0, movimientos: 2 })]
     await montar()
-    await act(async () => radios()[0].click())
-    await act(async () => boton('Iniciar conteo').click())
-    expect(supabase.rpc).toHaveBeenCalledWith('iniciar_conteo', { p_nombre: null, p_continuar_de: null })
+    expect(contenedor.textContent).toMatch(/No se realizó ningún conteo/)
+    expect(contenedor.textContent).not.toMatch(/esp rosa/)
   })
 
-  it('previo de otro día: se ofrece pero queda preseleccionado "de cero"', async () => {
-    resp.ultimo = { ...cerradoHoy, cerrado_at: new Date(2020, 0, 1).toISOString() }; resp.contados = 5
+  it('abrir con el nombre vacío no llama a la base y avisa', async () => {
     await montar()
-    expect(radios()).toHaveLength(2)
-    expect(radios()[0].checked).toBe(true)
-    await act(async () => boton('Iniciar conteo').click())
-    expect(supabase.rpc).toHaveBeenCalledWith('iniciar_conteo', { p_nombre: null, p_continuar_de: null })
+    await click('Abrir conteo')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(contenedor.textContent).toMatch(/Escribí qué vas a contar/)
   })
 
-  it('un nombre escrito a mano se envía tal cual (sin espacios sobrantes)', async () => {
+  it('abrir con un nombre lo envía sin espacios sobrantes', async () => {
     await montar()
-    await escribir(contenedor.querySelector('input[placeholder="Nombre (opcional)"]'), '  Conteo depósito  ')
-    await act(async () => boton('Iniciar conteo').click())
-    expect(supabase.rpc).toHaveBeenCalledWith('iniciar_conteo', { p_nombre: 'Conteo depósito', p_continuar_de: null })
+    await escribir(input('Ej: esp rosa'), '  esp rosa  ')
+    await click('Abrir conteo')
+    expect(supabase.rpc).toHaveBeenCalledWith('abrir_conteo', { p_producto: 'esp rosa' })
   })
 
-  it('si la base rechaza el inicio, se muestra el motivo', async () => {
-    supabase.rpc.mockResolvedValue({ error: { message: 'Ya hay un conteo abierto: cerralo antes de iniciar otro' } })
+  it('si la base rechaza la apertura, se muestra el motivo', async () => {
+    supabase.rpc.mockResolvedValue({ error: { message: 'Ya hay un conteo abierto: cerralo antes de abrir otro' } })
     await montar()
-    await act(async () => boton('Iniciar conteo').click())
+    await escribir(input('Ej: esp rosa'), 'esp rosa')
+    await click('Abrir conteo')
     expect(contenedor.textContent).toMatch(/Ya hay un conteo abierto/)
   })
 
-  it('un contador no puede iniciar conteos ni ve opciones', async () => {
-    resp.ultimo = cerradoHoy; resp.contados = 3
+  it('un contador no puede abrir conteos', async () => {
     await montar(contador)
-    expect(boton('Iniciar conteo')).toBeUndefined()
-    expect(radios()).toHaveLength(0)
+    expect(input('Ej: esp rosa')).toBeNull()
     expect(contenedor.textContent).toMatch(/Esperá a que el administrador/)
+  })
+})
+
+describe('Conteo · con un conteo abierto', () => {
+  // Clases: sumar entero · restar ≤ total · restar > total · decimal · vacío · atajos · rol · cierre · cargas rechazadas
+  beforeEach(() => {
+    resp.abierto = abierto
+    resp.resumen.c1 = [fila({ contado: 15, movimientos: 2 })]
+  })
+
+  it('muestra el producto y el total parcial', async () => {
+    await montar()
+    expect(contenedor.textContent).toMatch(/esp rosa/)
+    expect(contenedor.textContent).toMatch(/Total: 15/)
+  })
+
+  it('sumar 20 envía +20', async () => {
+    await montar()
+    await escribir(input('Cantidad'), '20')
+    await click('Sumar')
+    expect(cargasEnviadas()).toEqual([20])
+  })
+
+  it('restar 5 (menos que el total) envía −5', async () => {
+    await montar()
+    await escribir(input('Cantidad'), '5')
+    await click('Restar')
+    expect(cargasEnviadas()).toEqual([-5])
+  })
+
+  it('restar más que el total no envía nada y avisa', async () => {
+    await montar()
+    await escribir(input('Cantidad'), '20')
+    await click('Restar')
+    expect(mockUpsert).not.toHaveBeenCalled()
+    expect(contenedor.textContent).toMatch(/No podés restar más de lo contado \(15\)/)
+  })
+
+  it('un decimal no se envía', async () => {
+    await montar()
+    await escribir(input('Cantidad'), '2,5')
+    await click('Sumar')
+    expect(mockUpsert).not.toHaveBeenCalled()
+    expect(contenedor.textContent).toMatch(/enteros/)
+  })
+
+  it('sin cantidad no se envía', async () => {
+    await montar()
+    await click('Sumar')
+    expect(mockUpsert).not.toHaveBeenCalled()
+  })
+
+  it('los atajos acumulan en el campo (+5 +10 = 15)', async () => {
+    await montar()
+    await click('+5')
+    await click('+10')
+    expect(input('Cantidad').value).toBe('15')
+  })
+
+  it('un contador puede sumar pero no ve "Cerrar conteo"', async () => {
+    await montar(contador)
+    expect(boton('Sumar')).toBeDefined()
+    expect(boton('Cerrar conteo')).toBeUndefined()
+  })
+
+  it('el admin cierra con confirmación, que muestra el total', async () => {
+    await montar()
+    await click('Cerrar conteo')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(contenedor.textContent).toMatch(/¿Cerrar el conteo\?/)
+    expect(contenedor.textContent).toMatch(/esp rosa: 15/)
+    await click('Sí, cerrar conteo')
+    expect(supabase.rpc).toHaveBeenCalledWith('cerrar_conteo', { p_conteo: 'c1' })
+  })
+
+  it('cerrar con total 0 avisa que se cierra como no realizado', async () => {
+    resp.resumen.c1 = [fila({ contado: 0, movimientos: 2 })]
+    await montar()
+    await click('Cerrar conteo')
+    expect(contenedor.textContent).toMatch(/No se contó nada/)
+    expect(contenedor.textContent).not.toMatch(/esp rosa: 0/)
+  })
+
+  it('si la base rechaza una carga (p. ej. otro restó antes), se avisa y se puede descartar el aviso', async () => {
+    resp.upsert = { error: { code: 'P0001', message: 'No se puede restar más de lo contado (3)' } }
+    await montar()
+    await escribir(input('Cantidad'), '5')
+    await click('Restar')
+    expect(contenedor.textContent).toMatch(/1 carga no se guardó/)
+    await click('Entendido')
+    expect(contenedor.textContent).not.toMatch(/no se guardó/)
   })
 })

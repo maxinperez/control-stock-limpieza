@@ -1,5 +1,36 @@
 // Lógica pura del conteo (sin React ni Supabase), para poder probarla.
+import { parseNumero, validarCantidad } from './unidades'
+
 const num = (v) => (v == null ? 0 : Number(v))
+
+export const MAX_NOMBRE_PRODUCTO = 60
+
+// Nombre libre del producto a contar (ej. "esp rosa").
+export function validarNombreProducto(texto) {
+  const nombre = String(texto ?? '').trim()
+  if (!nombre) return { ok: false, error: 'Escribí qué vas a contar' }
+  if (nombre.length > MAX_NOMBRE_PRODUCTO) {
+    return { ok: false, error: `El nombre puede tener hasta ${MAX_NOMBRE_PRODUCTO} caracteres` }
+  }
+  return { ok: true, nombre }
+}
+
+// Productos con algo contado en el conteo simple. Como no se puede cargar 0, un total de 0
+// solo sale de sumar y restar lo mismo: equivale a no haber contado.
+export const conCantidad = (rows) => rows.filter((r) => num(r.contado) > 0)
+
+// Sumar o restar sobre el total parcial. Solo enteros positivos; el total nunca queda negativo.
+// Devuelve { ok, delta, error }: delta es lo que se carga (negativo al restar).
+export function validarMovimiento(total, texto, tipo) {
+  const valor = parseNumero(texto)
+  if (valor === null) return { ok: false, error: 'Ingresá una cantidad' }
+  const r = validarCantidad('un', valor)
+  if (!r.ok) return { ok: false, error: r.error }
+  if (tipo === 'restar' && valor > num(total)) {
+    return { ok: false, error: `No podés restar más de lo contado (${num(total)})` }
+  }
+  return { ok: true, delta: tipo === 'restar' ? -valor : valor }
+}
 export const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
 // Suma a lo que ya está en el servidor las cargas que aún no se enviaron.

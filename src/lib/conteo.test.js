@@ -1,8 +1,62 @@
 import { describe, expect, it } from 'vitest'
 import {
   diferencias, filtrar, mergePendientes, opcionContinuar, progreso, puedeExportar, reposicion, sinContar,
-  textoCierreHecho, textoConfirmarCierre, textoContinuar,
+  textoCierreHecho, textoConfirmarCierre, textoContinuar, validarMovimiento, validarNombreProducto,
+  conCantidad,
 } from './conteo'
+
+describe('conCantidad (qué cuenta como "contado" en el conteo simple)', () => {
+  // Clases: sin cargas · cargas que suman 0 (sumó y restó lo mismo) · total positivo · total como texto · lista vacía
+  const r = (contado, movimientos) => ({ producto_id: 'p', contado, movimientos })
+  it('sin cargas no cuenta', () => expect(conCantidad([r(0, 0)])).toEqual([]))
+  it('sumar n y restar n (total 0) no cuenta', () => expect(conCantidad([r(0, 2)])).toEqual([]))
+  it('total positivo cuenta', () => expect(conCantidad([r(15, 2)])).toHaveLength(1))
+  it('total que llega como texto desde la base', () => {
+    expect(conCantidad([r('0.000', 2)])).toEqual([])
+    expect(conCantidad([r('3.000', 1)])).toHaveLength(1)
+  })
+  it('lista vacía', () => expect(conCantidad([])).toEqual([]))
+})
+
+describe('validarNombreProducto', () => {
+  // Clases: vacío · solo espacios · normal (con espacios a los lados) · exactamente 60 (límite) · 61
+  it('vacío o ausente es inválido', () => {
+    expect(validarNombreProducto('').ok).toBe(false)
+    expect(validarNombreProducto(undefined).ok).toBe(false)
+  })
+  it('solo espacios es inválido', () => expect(validarNombreProducto('   ').error).toMatch(/Escribí/))
+  it('normal: se recortan los espacios', () => expect(validarNombreProducto('  esp rosa ')).toEqual({ ok: true, nombre: 'esp rosa' }))
+  it('exactamente 60 caracteres es válido (límite)', () => expect(validarNombreProducto('x'.repeat(60)).ok).toBe(true))
+  it('61 caracteres es inválido', () => expect(validarNombreProducto('x'.repeat(61)).error).toMatch(/60/))
+})
+
+describe('validarMovimiento (sumar y restar sobre el total parcial)', () => {
+  // Clases de cantidad: entero > 0 · decimal · cero · negativo · texto no numérico · vacío
+  // Clases de resta: menor al total · igual al total (límite, queda 0) · mayor al total · total 0
+  it('sumar un entero positivo', () => expect(validarMovimiento(0, '20', 'sumar')).toEqual({ ok: true, delta: 20 }))
+  it('restar un entero menor al total da delta negativo', () => expect(validarMovimiento(20, '5', 'restar')).toEqual({ ok: true, delta: -5 }))
+  it('restar exactamente el total es válido (límite)', () => expect(validarMovimiento(15, '15', 'restar')).toEqual({ ok: true, delta: -15 }))
+  it('restar más que el total es inválido', () => {
+    const r = validarMovimiento(15, '20', 'restar')
+    expect(r.ok).toBe(false)
+    expect(r.error).toBe('No podés restar más de lo contado (15)')
+  })
+  it('restar con total 0 es inválido', () => expect(validarMovimiento(0, '1', 'restar').ok).toBe(false))
+  it('decimal es inválido (con punto o con coma)', () => {
+    expect(validarMovimiento(10, '2.5', 'sumar').error).toMatch(/enteros/)
+    expect(validarMovimiento(10, '2,5', 'restar').error).toMatch(/enteros/)
+  })
+  it('cero es inválido', () => expect(validarMovimiento(10, '0', 'sumar').ok).toBe(false))
+  it('negativo escrito es inválido (para restar se usa el botón Restar)', () => expect(validarMovimiento(10, '-3', 'sumar').ok).toBe(false))
+  it('texto no numérico o vacío es inválido', () => {
+    expect(validarMovimiento(10, 'abc', 'sumar').error).toBe('Ingresá una cantidad')
+    expect(validarMovimiento(10, '', 'sumar').ok).toBe(false)
+  })
+  it('el total que llega como texto desde la base se interpreta', () => {
+    expect(validarMovimiento('15.000', '15', 'restar').ok).toBe(true)
+    expect(validarMovimiento('15.000', '16', 'restar').ok).toBe(false)
+  })
+})
 
 const row = (o = {}) => ({
   producto_id: 'p1', codigo: 'A1', barcode: null, nombre: 'Esponja', unidad: 'un',

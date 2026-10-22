@@ -3,9 +3,7 @@ import { supabase } from './supabase'
 import { flush, getPending } from './offline'
 import Login from './pages/Login'
 import Conteo from './pages/Conteo'
-import Productos from './pages/Productos'
-import Reportes from './pages/Reportes'
-import Usuarios from './pages/Usuarios'
+// Productos, Reportes y Usuarios están ocultas por ahora (el código sigue en src/pages).
 
 export default function App() {
   const [session, setSession] = useState(undefined) // undefined = cargando
@@ -57,8 +55,7 @@ export default function App() {
     )
   }
 
-  const admin = profile.rol === 'admin'
-  const tabs = [['conteo', 'Conteo'], ...(admin ? [['productos', 'Productos'], ['reportes', 'Reportes'], ['usuarios', 'Usuarios']] : [])]
+  const tabs = [['conteo', 'Conteo']]
 
   return (
     <div className="app">
@@ -74,9 +71,6 @@ export default function App() {
       {pending > 0 && <div className="banner">{pending} carga(s) pendientes de enviar.</div>}
 
       {tab === 'conteo' && <Conteo profile={profile} onChange={() => setPending(getPending().length)} />}
-      {tab === 'productos' && admin && <Productos />}
-      {tab === 'reportes' && admin && <Reportes />}
-      {tab === 'usuarios' && admin && <Usuarios me={profile} />}
 
       {tabs.length > 1 && (
         <nav className="tabs">

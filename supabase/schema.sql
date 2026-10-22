@@ -24,7 +24,8 @@ create table public.productos (
   stock_actual numeric(14,3) not null default 0,  -- stock "base" de la app
   stock_minimo numeric(14,3) not null default 0,
   activo boolean not null default true,
-  origen text not null default 'importado' check (origen in ('importado','alta_rapida')),
+  origen text not null default 'importado'
+    constraint productos_origen_check check (origen in ('importado','alta_rapida','conteo')),
   created_at timestamptz not null default now()
 );
 create index productos_barcode_idx on public.productos(barcode);
@@ -36,7 +37,8 @@ create table public.conteos (
   creado_por uuid references auth.users(id),
   created_at timestamptz not null default now(),
   cerrado_at timestamptz,
-  continua_de uuid references public.conteos(id) on delete set null  -- conteo anterior que este continúa
+  continua_de uuid references public.conteos(id) on delete set null,  -- conteo anterior que este continúa
+  max_productos int not null default 1 check (max_productos >= 1)     -- cuántos productos admite (hoy, 1)
 );
 -- Solo puede haber un conteo abierto a la vez
 create unique index conteos_un_abierto on public.conteos(estado) where estado = 'abierto';
@@ -208,6 +210,10 @@ begin
   if not exists (select 1 from conteos where id = p_conteo and estado = 'abierto') then
     raise exception 'El conteo no está abierto';
   end if;
+  if (select count(*) from conteo_base where conteo_id = p_conteo)
+     >= (select max_productos from conteos where id = p_conteo) then
+    raise exception 'Este conteo admite hasta % producto(s)', (select max_productos from conteos where id = p_conteo);
+  end if;
   insert into productos (codigo, barcode, nombre, unidad, stock_actual, origen)
   values (
     coalesce(nullif(trim(p_codigo), ''), 'NUEVO-' || substr(gen_random_uuid()::text, 1, 6)),
@@ -350,7 +356,70 @@ begin
   return 'eliminado';
 end $$;
 
+-- Abre un conteo de UN producto escrito a mano (solo admin). Es el flujo que usa la app hoy.
+create function public.abrir_conteo(p_producto text) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  v_id uuid := gen_random_uuid();
+  v_prod uuid;
+  v_nombre text := trim(coalesce(p_producto, ''));
+begin
+  if not is_admin() then raise exception 'Solo el administrador puede abrir un conteo'; end if;
+  if v_nombre = '' then raise exception 'Escribí qué vas a contar'; end if;
+  if length(v_nombre) > 60 then raise exception 'El nombre puede tener hasta 60 caracteres'; end if;
+  if exists (select 1 from conteos where estado = 'abierto') then
+    raise exception 'Ya hay un conteo abierto: cerralo antes de abrir otro';
+  end if;
+
+  insert into conteos (id, nombre, creado_por, max_productos)
+  values (
+    v_id,
+    'Conteo ' || to_char(now() at time zone 'America/Argentina/Buenos_Aires', 'DD/MM/YYYY')
+      || ' · ' || upper(substr(v_id::text, 1, 6)),
+    auth.uid(), 1
+  );
+
+  insert into productos (codigo, nombre, unidad, stock_actual, origen, activo)
+  values ('CNT-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8)),
+          v_nombre, 'un', 0, 'conteo', false)
+  returning id into v_prod;
+
+  insert into conteo_base (conteo_id, producto_id, stock_sistema) values (v_id, v_prod, 0);
+  return v_id;
+end $$;
+
+-- Reglas de cada carga: producto del conteo, enteros en unidades y total nunca negativo.
+create function public.validar_movimiento() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_unidad text; v_total numeric;
+begin
+  -- Reenvío de la cola sin conexión: ya está guardado, se ignora sin validar
+  if exists (select 1 from conteo_movimientos where id = new.id) then return null; end if;
+
+  -- Bloquea el producto en este conteo para que dos restas simultáneas no dejen el total negativo
+  perform 1 from conteo_base where conteo_id = new.conteo_id and producto_id = new.producto_id for update;
+  if not found then raise exception 'El producto no pertenece a este conteo'; end if;
+
+  select unidad into v_unidad from productos where id = new.producto_id;
+  if v_unidad = 'un' and new.cantidad <> trunc(new.cantidad) then
+    raise exception 'Las unidades se cuentan en números enteros';
+  end if;
+
+  select coalesce(sum(cantidad), 0) into v_total
+  from conteo_movimientos where conteo_id = new.conteo_id and producto_id = new.producto_id;
+  if v_total + new.cantidad < 0 then
+    raise exception 'No se puede restar más de lo contado (%)', trim_scale(v_total);
+  end if;
+  return new;
+end $$;
+
+create trigger conteo_movimientos_validar
+  before insert on public.conteo_movimientos
+  for each row execute function public.validar_movimiento();
+
 revoke execute on all functions in schema public from public, anon;
+revoke execute on function public.validar_movimiento() from authenticated;
+grant execute on function public.abrir_conteo(text) to authenticated;
 grant execute on function public.editar_producto(uuid,text,text,text,text,numeric,numeric) to authenticated;
 grant execute on function public.eliminar_producto(uuid) to authenticated;
 grant execute on function public.crear_producto(text,text,text,text,numeric,numeric) to authenticated;

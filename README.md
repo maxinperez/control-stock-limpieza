@@ -1,73 +1,49 @@
 # Control de Stock
 
-App web para **contar el stock de una tienda entre varias personas**, sin perder el hilo cuando alguien se interrumpe. Pensada para un local de productos de limpieza (líquidos, pastas y artículos secos), con hasta unas 5 personas contando a la vez y entre 100 y 500 productos.
+App web para **contar el stock de un producto entre varias personas**, sin perder el hilo cuando alguien se interrumpe. Pensada para un local de productos de limpieza, con hasta unas 5 personas contando a la vez.
 
-Es una app **independiente** del sistema de gestión del negocio: no se conecta a su base de datos ni toca su stock. Trabaja con una copia de los productos que se importa desde una planilla y, al terminar, exporta el resultado para cargarlo a mano en el sistema principal.
+Es una app **independiente** del sistema de gestión del negocio: no se conecta a su base de datos ni toca su stock. El resultado de cada conteo se pasa a mano al sistema principal.
 
 ## El problema que resuelve
 
 Contar stock a mano tiene un problema: si estás contando esponjas y entra un cliente, tenés que dejar de contar, anotar hasta dónde llegaste y después retomar, sin saber si vas a seguir desde el mismo punto.
 
-Acá cada carga **se suma** al total del producto y queda guardada con su autor y su hora. Se puede cortar en cualquier momento y seguir después, y varias personas pueden contar el mismo producto sin pisarse.
+Acá cada carga **se suma** (o se resta) al total y queda guardada. Se puede cortar en cualquier momento y seguir después, y varias personas pueden contar a la vez sin pisarse.
 
 ## Qué hace
 
-- **Conteo acumulativo:** se busca un producto y se suma la cantidad contada. Se puede corregir el total si hubo un error.
-- **Varios usuarios a la vez:** lo que carga una persona lo ven las demás casi al instante.
-- **Unidad, kilo y litro:** cada producto tiene su unidad. Las unidades se cuentan en enteros; kilos y litros admiten hasta 3 decimales.
-- **Progreso:** muestra cuántos productos faltan contar y permite filtrar por pendientes, contados y por tipo de unidad.
-- **Modo sin conexión:** si no hay señal en el depósito, las cargas se guardan en el teléfono y se envían solas al volver la conexión.
-- **Importar productos** desde una planilla (Excel o CSV) o **cargarlos a mano** uno por uno.
-- **Editar y eliminar productos** (solo administrador): se corrige código, nombre, unidad, categoría, stock y mínimo. Un producto que nunca se contó se borra; uno con historial se **archiva** (no aparece en conteos nuevos, conserva los anteriores y se puede reactivar).
-- **Alta rápida:** durante el conteo, cualquier persona puede dar de alta un producto que está en el local pero no en la planilla. Queda marcado para cargarlo después en el sistema principal.
-- **Reportes** (solo administrador): diferencias entre lo contado y el sistema, productos sin contar y productos a reponer (en o bajo el stock mínimo).
-- **Exportar a Excel** el resultado, con una hoja de ajustes lista para cargar en el sistema principal.
-- **Usuarios con roles:** el administrador crea las cuentas; los contadores solo cuentan.
+- **Un producto por conteo, escrito a mano:** el administrador abre el conteo escribiendo qué se va a contar, con el nombre que él entienda (por ejemplo "esp rosa"). Contar de a un producto evita errores.
+- **Sumar y restar:** cada persona carga lo que contó (+20) o corrige si contó de más (−5). Solo **enteros positivos**, y el total **nunca puede quedar negativo** (la base lo impide aunque dos personas resten a la vez).
+- **Varios usuarios a la vez:** lo que suma una persona lo ven las demás casi al instante.
+- **Modo sin conexión:** si no hay señal, las cargas se guardan en el teléfono y se envían solas al volver la conexión. Si alguna la rechaza la base (por ejemplo, el conteo ya se cerró), se avisa y no traba al resto.
+- **Revisar el resultado:** al cerrar el conteo, el total queda a la vista para pasarlo al sistema principal, hasta que se abre el siguiente.
 
-## Cómo se usa (flujo de trabajo)
+## Cómo se usa
 
-1. **Importar:** el administrador sube la copia de la planilla del sistema en la pestaña *Productos*. Si el código ya existe, se actualiza; los que no están en la planilla no se tocan.
-2. **Iniciar un conteo:** se toma una foto del stock actual de cada producto. Esa foto es la referencia contra la que se calculan las diferencias. El nombre es opcional: si se deja vacío se crea como `Conteo 18/10/2026 · 3F9A2C` (fecha + código aleatorio). Si ya hay un conteo cerrado con productos contados, se puede elegir **continuar con ese** o **empezar de cero** (ver más abajo).
-3. **Contar:** cada persona busca un producto y suma lo que cuenta. Puede cortar y seguir cuando quiera.
-4. **Revisar:** en *Reportes* el administrador ve las diferencias y qué falta contar.
-5. **Exportar y cerrar:** se descarga el Excel con los ajustes y se cierra el conteo. Lo contado pasa a ser el stock base de la app para el próximo conteo.
-6. El administrador carga los ajustes en el sistema principal.
+1. **Abrir:** el administrador escribe qué se va a contar (hasta 60 caracteres) y toca **Abrir conteo**. Solo puede haber un conteo abierto a la vez.
+2. **Contar:** todos ven el producto y el total parcial. Escriben la cantidad (o usan +1 / +5 / +10) y tocan **Sumar** o **Restar**.
+3. **Cerrar:** el administrador toca **Cerrar conteo** y confirma. Conviene avisar antes a los demás que dejen de contar.
+4. **Revisar y pasar:** la pantalla muestra el último conteo cerrado con su total. Ese número se carga a mano en el sistema principal.
+5. **Reiniciar:** al abrir un conteo nuevo, el anterior deja de mostrarse.
 
-Reglas al editar un producto: el código no puede repetirse; la unidad no se cambia si el producto ya tiene cantidades contadas; y el stock del sistema no se modifica mientras hay un conteo abierto (se fijó al iniciarlo). Si se elimina un producto durante un conteo y todavía no tenía cargas ahí, también se lo saca de ese conteo.
+No hay historial visible en la app, pero **todos los conteos quedan guardados en la base**, lo que deja lugar a mejoras futuras (recopilar conteos, recordar productos que se cuentan seguido, etc.).
 
-### Varios conteos en el mismo día: continuar el anterior
+### Preparado para varios productos
 
-Se puede cerrar un conteo y abrir otro cuando se quiera, incluso el mismo día. Al iniciar el nuevo, el administrador elige:
+Cada conteo tiene un máximo de productos (`conteos.max_productos`, hoy siempre 1). La pantalla ya muestra un bloque por producto y la base rechaza agregar más de los permitidos, así que permitir N productos el día de mañana es cambiar ese valor y agregar la forma de sumar productos al conteo.
 
-- **Empezar de cero:** conteo independiente, con la foto del stock actual.
-- **Continuar con «conteo anterior»:** el nuevo arranca con **lo ya contado** y se sigue sumando (las cantidades de un mismo producto se **suman**). El stock de referencia sigue siendo el **original** del conteo que se continúa, por lo que las diferencias siempre se miden contra lo que tiene el sistema principal. El conteo anterior queda intacto en el historial.
+### Pantallas ocultas por ahora
 
-Como el último conteo acumula todo lo anterior, **en el sistema principal se carga solo el resultado del último** (si se cargaran los dos, se duplicarían los ajustes). Reportes lo avisa con "Continúa de «…»". Para tomar una planilla nueva, conviene empezar de cero. El historial completo se ve en el selector de Reportes.
-
-Solo puede haber un conteo abierto a la vez, y no se puede importar ni crear productos a mano mientras haya uno abierto (para eso está la alta rápida).
-
-### Formato de la planilla
-
-| Columna | Obligatoria | Detalle |
-|---|---|---|
-| `codigo` | Sí | Identifica al producto. Es la clave de enlace con el sistema principal. |
-| `nombre` | Sí | |
-| `stock` | Recomendada | Stock según el sistema (si falta, se toma 0). |
-| `unidad` | No | `un`, `kg` o `lt`. Acepta variantes (`kilos`, `litros`, `unidades`…). Vacía = `un`. |
-| `categoria` | No | |
-| `stock_minimo` | No | Para la lista "a reponer". Si la columna no está, no pisa lo ya cargado. |
-
-Los encabezados se reconocen sin importar mayúsculas ni tildes, y admiten sinónimos comunes (`descripcion`, `rubro`, `existencia`, etc.). Las filas sin nombre o código, o con una unidad no válida, se omiten y se informan al importar. Desde la app se puede descargar una plantilla de ejemplo.
+Las pestañas **Productos** (planilla, alta y edición de productos), **Reportes** (diferencias contra el sistema y Excel) y **Usuarios** quedaron **ocultas**: su código sigue en `src/pages` con sus tests, y se reactivan agregándolas a `tabs` en `src/App.jsx`. Mientras estén ocultas, los usuarios se crean desde el panel de Supabase (Authentication → Users → Add user).
 
 ## Roles y seguridad
 
 | | Contador | Administrador |
 |---|---|---|
-| Ver productos y conteo | Sí | Sí |
-| Sumar cantidades y dar de alta productos durante el conteo | Sí | Sí |
-| Importar / crear / editar / eliminar productos, iniciar y cerrar conteos | No | Sí |
-| Ver reportes y exportar | No | Sí |
-| Crear y desactivar usuarios | No | Sí |
+| Ver el conteo y el último resultado | Sí | Sí |
+| Sumar y restar cantidades | Sí | Sí |
+| Abrir y cerrar conteos | No | Sí |
+| Productos, reportes y usuarios (pantallas ocultas por ahora) | No | Sí |
 
 - Los permisos se aplican **en la base de datos** (políticas RLS de Supabase), no solo en la pantalla: aunque alguien manipule la app, la base rechaza lo que su rol no permite.
 - **El primer usuario que se crea queda como administrador**; los siguientes, como contadores.
@@ -109,7 +85,8 @@ supabase/
 
 - Cada carga es un **registro nuevo** en `conteo_movimientos` (producto, cantidad, usuario, hora). El total de un producto es la suma de sus registros, así nunca se pisan dos personas y queda historial.
 - Cada registro tiene un **id generado en el dispositivo**: si una carga hecha sin conexión se reenvía, la base la reconoce y no la duplica.
-- Al iniciar un conteo se guarda el stock del sistema de cada producto en `conteo_base`, por eso las diferencias siguen siendo correctas aunque después se actualice la planilla.
+- Al abrir un conteo (`abrir_conteo`) se crea un producto propio de ese conteo con el nombre escrito (`origen = 'conteo'`, sin mezclarse con un catálogo) y su fila en `conteo_base`.
+- Un trigger en `conteo_movimientos` (`validar_movimiento`) hace cumplir las reglas en la base: el producto tiene que ser del conteo, las unidades son enteras y el total no puede quedar negativo. Los reenvíos de la cola sin conexión se ignoran sin error.
 
 ## Puesta en marcha
 
@@ -145,6 +122,8 @@ npm test
 Los tests están organizados por **clases de equivalencia**: cada `describe` enumera las clases (por ejemplo, "entero positivo", "decimal", "cero", "negativo", "no numérico") y cada `it` prueba un representante de una clase. Corrélos antes de subir cada cambio. Cubren la lógica de `src/lib/` y la cola offline (`src/offline.js`).
 
 ## Decisiones y límites
+
+- **Un producto escrito a mano por conteo** por pedido del cliente. El nombre libre no tiene código, así que no se vincula con el sistema principal ni calcula diferencias: el resultado se pasa a mano.
 
 - **Independiente del sistema principal** por pedido del cliente. El código de producto (`codigo`) es la clave de enlace, de modo que un futuro vínculo directo solo tendría que reemplazar el paso de importar y exportar la planilla.
 - **Sin costos ni stock ideal:** la app cuenta cantidades; no valoriza ni sugiere cuánto pedir.
