@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  diferencias, filtrar, mergePendientes, progreso, puedeExportar, reposicion, sinContar,
-  textoCierreHecho, textoConfirmarCierre,
+  diferencias, filtrar, mergePendientes, opcionContinuar, progreso, puedeExportar, reposicion, sinContar,
+  textoCierreHecho, textoConfirmarCierre, textoContinuar,
 } from './conteo'
 
 const row = (o = {}) => ({
@@ -93,6 +93,45 @@ describe('puedeExportar', () => {
   it('movimientos que llegan como texto desde la base', () => {
     expect(puedeExportar([row({ movimientos: '0' })]).ok).toBe(false)
     expect(puedeExportar([row({ movimientos: '3' })]).ok).toBe(true)
+  })
+})
+
+describe('opcionContinuar / textoContinuar', () => {
+  // Clases: sin conteo previo · previo sin contados · previo con contados del mismo día ·
+  // previo con contados de otro día (ayer / otro mes) · cierre ausente (usa la creación) · contados como texto
+  const ahora = new Date(2026, 9, 18, 15, 0) // 18/10/2026 15:00 hora local
+  const cerrado = (fecha) => ({ nombre: 'Conteo A', cerrado_at: fecha.toISOString() })
+
+  it('sin conteo previo: no se ofrece', () => {
+    expect(opcionContinuar(null, 0, ahora)).toEqual({ disponible: false, sugerida: false })
+    expect(opcionContinuar(undefined, undefined, ahora)).toEqual({ disponible: false, sugerida: false })
+  })
+  it('previo sin ningún producto contado: no se ofrece', () => {
+    expect(opcionContinuar(cerrado(new Date(2026, 9, 18, 9, 0)), 0, ahora).disponible).toBe(false)
+  })
+  it('previo con contados cerrado hoy: se ofrece y se sugiere', () => {
+    expect(opcionContinuar(cerrado(new Date(2026, 9, 18, 9, 30)), 3, ahora)).toEqual({ disponible: true, sugerida: true })
+  })
+  it('exactamente un contado cuenta (límite)', () => {
+    expect(opcionContinuar(cerrado(new Date(2026, 9, 18, 9, 30)), 1, ahora).disponible).toBe(true)
+  })
+  it('previo cerrado ayer (23:59): se ofrece pero no se sugiere', () => {
+    expect(opcionContinuar(cerrado(new Date(2026, 9, 17, 23, 59)), 3, ahora)).toEqual({ disponible: true, sugerida: false })
+  })
+  it('mismo número de día pero otro mes: no se sugiere', () => {
+    expect(opcionContinuar(cerrado(new Date(2026, 8, 18, 10, 0)), 3, ahora).sugerida).toBe(false)
+  })
+  it('sin fecha de cierre usa la de creación', () => {
+    const c = { nombre: 'X', created_at: new Date(2026, 9, 18, 8, 0).toISOString() }
+    expect(opcionContinuar(c, 2, ahora).sugerida).toBe(true)
+  })
+  it('la cantidad de contados que llega como texto se interpreta', () => {
+    expect(opcionContinuar(cerrado(new Date(2026, 9, 18, 9, 0)), '4', ahora).disponible).toBe(true)
+  })
+
+  it('textoContinuar: plural y singular', () => {
+    expect(textoContinuar({ nombre: 'Conteo A' }, 3)).toBe('Continuar con «Conteo A» (3 productos contados)')
+    expect(textoContinuar({ nombre: 'Conteo A' }, 1)).toBe('Continuar con «Conteo A» (1 producto contado)')
   })
 })
 

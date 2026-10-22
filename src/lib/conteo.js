@@ -36,6 +36,21 @@ export function filtrar(view, { q = '', filtro = 'todos', unidad = 'todas', limi
   }).slice(0, limit)
 }
 
+// ¿Se ofrece continuar el último conteo cerrado al iniciar uno nuevo?
+// disponible: el último cerrado tuvo al menos un producto contado.
+// sugerida: se cerró el mismo día calendario (hora local), así que lo normal es seguir sumando.
+export function opcionContinuar(ultimoCerrado, contados, ahora = new Date()) {
+  if (!ultimoCerrado || !(num(contados) > 0)) return { disponible: false, sugerida: false }
+  const cierre = new Date(ultimoCerrado.cerrado_at ?? ultimoCerrado.created_at)
+  const mismoDia = cierre.getFullYear() === ahora.getFullYear()
+    && cierre.getMonth() === ahora.getMonth()
+    && cierre.getDate() === ahora.getDate()
+  return { disponible: true, sugerida: mismoDia }
+}
+
+export const textoContinuar = (ultimoCerrado, contados) =>
+  `Continuar con «${ultimoCerrado.nombre}» (${plural(num(contados), 'producto contado', 'productos contados')})`
+
 // El Excel de resultado solo tiene sentido si se contó al menos un producto.
 export function puedeExportar(rows) {
   if (!rows.length) return { ok: false, motivo: 'Este conteo no tiene productos.' }

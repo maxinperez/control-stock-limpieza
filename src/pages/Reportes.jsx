@@ -32,6 +32,7 @@ export default function Reportes() {
   useEffect(() => { load() }, [load])
 
   const conteo = conteos.find((c) => c.id === id)
+  const anterior = conteo?.continua_de ? conteos.find((c) => c.id === conteo.continua_de) : null
   const contados = useMemo(() => contadosDe(rows), [rows])
   const sinContar = useMemo(() => sinContarDe(rows), [rows])
   const difs = useMemo(() => diferencias(rows), [rows])
@@ -72,6 +73,11 @@ export default function Reportes() {
         <select value={id} onChange={(e) => setId(e.target.value)}>
           {conteos.map((c) => <option key={c.id} value={c.id}>{c.nombre} · {c.estado}</option>)}
         </select>
+        {conteo?.continua_de && (
+          <div className="muted">
+            Continúa de «{anterior?.nombre ?? 'un conteo anterior'}». Acumula lo contado antes: cargá en el sistema principal solo este resultado.
+          </div>
+        )}
         <div className="row">
           <span className="grow">Contados <b>{contados.length}/{rows.length}</b></span>
           <span className="grow">Con diferencia <b>{difs.length}</b></span>

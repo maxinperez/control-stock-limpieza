@@ -27,13 +27,22 @@ Acá cada carga **se suma** al total del producto y queda guardada con su autor 
 ## Cómo se usa (flujo de trabajo)
 
 1. **Importar:** el administrador sube la copia de la planilla del sistema en la pestaña *Productos*. Si el código ya existe, se actualiza; los que no están en la planilla no se tocan.
-2. **Iniciar un conteo:** se toma una foto del stock actual de cada producto. Esa foto es la referencia contra la que se calculan las diferencias.
+2. **Iniciar un conteo:** se toma una foto del stock actual de cada producto. Esa foto es la referencia contra la que se calculan las diferencias. El nombre es opcional: si se deja vacío se crea como `Conteo 18/10/2026 · 3F9A2C` (fecha + código aleatorio). Si ya hay un conteo cerrado con productos contados, se puede elegir **continuar con ese** o **empezar de cero** (ver más abajo).
 3. **Contar:** cada persona busca un producto y suma lo que cuenta. Puede cortar y seguir cuando quiera.
 4. **Revisar:** en *Reportes* el administrador ve las diferencias y qué falta contar.
 5. **Exportar y cerrar:** se descarga el Excel con los ajustes y se cierra el conteo. Lo contado pasa a ser el stock base de la app para el próximo conteo.
 6. El administrador carga los ajustes en el sistema principal.
 
 Reglas al editar un producto: el código no puede repetirse; la unidad no se cambia si el producto ya tiene cantidades contadas; y el stock del sistema no se modifica mientras hay un conteo abierto (se fijó al iniciarlo). Si se elimina un producto durante un conteo y todavía no tenía cargas ahí, también se lo saca de ese conteo.
+
+### Varios conteos en el mismo día: continuar el anterior
+
+Se puede cerrar un conteo y abrir otro cuando se quiera, incluso el mismo día. Al iniciar el nuevo, el administrador elige:
+
+- **Empezar de cero:** conteo independiente, con la foto del stock actual.
+- **Continuar con «conteo anterior»:** el nuevo arranca con **lo ya contado** y se sigue sumando (las cantidades de un mismo producto se **suman**). El stock de referencia sigue siendo el **original** del conteo que se continúa, por lo que las diferencias siempre se miden contra lo que tiene el sistema principal. El conteo anterior queda intacto en el historial.
+
+Como el último conteo acumula todo lo anterior, **en el sistema principal se carga solo el resultado del último** (si se cargaran los dos, se duplicarían los ajustes). Reportes lo avisa con "Continúa de «…»". Para tomar una planilla nueva, conviene empezar de cero. El historial completo se ve en el selector de Reportes.
 
 Solo puede haber un conteo abierto a la vez, y no se puede importar ni crear productos a mano mientras haya uno abierto (para eso está la alta rápida).
 

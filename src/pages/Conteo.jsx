@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../supabase'
 import { enqueue, flush, getCache, getPending, setCache } from '../offline'
-import { filtrar, mergePendientes, progreso } from '../lib/conteo'
+import { filtrar, mergePendientes, opcionContinuar, progreso, textoContinuar } from '../lib/conteo'
 import { ETIQUETA, UNIDADES, parseNumero, validarCantidad, validarTotal } from '../lib/unidades'
 
 const num = (v) => (v == null ? 0 : Number(v))
@@ -18,8 +18,16 @@ export default function Conteo({ profile, onChange }) {
   const [sel, setSel] = useState(null)
   const [alta, setAlta] = useState(false)
   const [nombreConteo, setNombreConteo] = useState('')
+  const [previo, setPrevio] = useState(null) // último conteo cerrado y cuántos productos contó
+  const [eleccion, setEleccion] = useState('cero') // 'cero' | 'continuar'
   const [err, setErr] = useState('')
   const timer = useRef()
+
+  const opcion = useMemo(
+    () => opcionContinuar(previo?.conteo, previo?.contados),
+    [previo],
+  )
+  useEffect(() => { setEleccion(opcion.sugerida ? 'continuar' : 'cero') }, [opcion])
 
   const load = useCallback(async () => {
     const { data: c, error } = await supabase.from('conteos').select('*').eq('estado', 'abierto').maybeSingle()
@@ -28,11 +36,25 @@ export default function Conteo({ profile, onChange }) {
       if (cache) { setConteo(cache.conteo); setRows(cache.rows) } else setConteo(null)
       return
     }
-    if (!c) { setConteo(null); setRows([]); return }
+    if (!c) {
+      // Sin conteo abierto: el admin puede continuar el último cerrado
+      let ultimo = null
+      if (admin) {
+        const { data: ult } = await supabase.from('conteos').select('*').eq('estado', 'cerrado')
+          .order('created_at', { ascending: false }).limit(1).maybeSingle()
+        if (ult) {
+          const { count } = await supabase.from('conteo_resumen').select('producto_id', { count: 'exact', head: true })
+            .eq('conteo_id', ult.id).gt('movimientos', 0)
+          ultimo = { conteo: ult, contados: count ?? 0 }
+        }
+      }
+      setPrevio(ultimo); setConteo(null); setRows([])
+      return
+    }
     const { data } = await supabase.from('conteo_resumen').select('*').eq('conteo_id', c.id).order('nombre').range(0, 4999)
     setConteo(c); setRows(data ?? [])
     setCache({ conteo: c, rows: data ?? [] })
-  }, [])
+  }, [admin])
 
   useEffect(() => { load() }, [load])
 
@@ -67,8 +89,12 @@ export default function Conteo({ profile, onChange }) {
 
   async function iniciar() {
     setErr('')
-    const { error } = await supabase.rpc('iniciar_conteo', { p_nombre: nombreConteo.trim() || 'Conteo ' + new Date().toLocaleDateString('es-AR') })
-    if (error) setErr(error.message); else load()
+    const continuar = eleccion === 'continuar' && opcion.disponible
+    const { error } = await supabase.rpc('iniciar_conteo', {
+      p_nombre: nombreConteo.trim() || null, // vacío: la base arma "Conteo fecha · código"
+      p_continuar_de: continuar ? previo.conteo.id : null,
+    })
+    if (error) setErr(error.message); else { setNombreConteo(''); load() }
   }
 
   if (conteo === undefined) return <p className="muted">Cargando…</p>
@@ -79,8 +105,27 @@ export default function Conteo({ profile, onChange }) {
         <b>No hay un conteo abierto.</b>
         {admin ? (
           <>
-            <p className="muted" style={{ margin: 0 }}>Se toma una foto del stock actual de los productos importados. Asegurate de haber importado la planilla más reciente.</p>
-            <input placeholder="Nombre (ej: Conteo octubre)" value={nombreConteo} onChange={(e) => setNombreConteo(e.target.value)} />
+            {opcion.disponible && (
+              <div className="stack">
+                <label className="row">
+                  <input type="radio" name="inicio" style={{ width: 'auto', padding: 0 }}
+                    checked={eleccion === 'cero'} onChange={() => setEleccion('cero')} />
+                  <span>Empezar de cero</span>
+                </label>
+                <label className="row">
+                  <input type="radio" name="inicio" style={{ width: 'auto', padding: 0 }}
+                    checked={eleccion === 'continuar'} onChange={() => setEleccion('continuar')} />
+                  <span>{textoContinuar(previo.conteo, previo.contados)}</span>
+                </label>
+              </div>
+            )}
+            <p className="muted" style={{ margin: 0 }}>
+              {eleccion === 'continuar' && opcion.disponible
+                ? 'Arranca con lo ya contado y sigue sumando. El stock de referencia sigue siendo el original; el conteo anterior queda en el historial. Para tomar una planilla nueva, empezá de cero.'
+                : 'Se toma una foto del stock actual de los productos importados. Asegurate de haber importado la planilla más reciente.'}
+            </p>
+            <input placeholder="Nombre (opcional)" value={nombreConteo} onChange={(e) => setNombreConteo(e.target.value)} />
+            <span className="muted">Si lo dejás vacío se crea con la fecha y un código aleatorio.</span>
             <button className="primary" onClick={iniciar}>Iniciar conteo</button>
             {err && <div className="err">{err}</div>}
           </>

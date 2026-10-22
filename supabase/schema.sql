@@ -35,7 +35,8 @@ create table public.conteos (
   estado text not null default 'abierto' check (estado in ('abierto','cerrado')),
   creado_por uuid references auth.users(id),
   created_at timestamptz not null default now(),
-  cerrado_at timestamptz
+  cerrado_at timestamptz,
+  continua_de uuid references public.conteos(id) on delete set null  -- conteo anterior que este continúa
 );
 -- Solo puede haber un conteo abierto a la vez
 create unique index conteos_un_abierto on public.conteos(estado) where estado = 'abierto';
@@ -138,14 +139,62 @@ end $$;
 create trigger on_auth_user_created after insert on auth.users
 for each row execute function public.handle_new_user();
 
-create function public.iniciar_conteo(p_nombre text) returns uuid
+-- Inicia un conteo. Con p_continuar_de (un conteo CERRADO) el nuevo arranca con lo ya contado
+-- y conserva el stock de referencia original; sin él, parte de cero con el stock actual.
+-- Si no se da nombre, se genera: 'Conteo dd/mm/aaaa · XXXXXX' (código = comienzo del id).
+create function public.iniciar_conteo(p_nombre text default null, p_continuar_de uuid default null) returns uuid
 language plpgsql security definer set search_path = public as $$
-declare v_id uuid;
+declare
+  v_id uuid := gen_random_uuid();
+  v_prev conteos%rowtype;
+  v_nombre text;
 begin
   if not is_admin() then raise exception 'Solo el administrador puede iniciar un conteo'; end if;
-  insert into conteos (nombre, creado_por) values (p_nombre, auth.uid()) returning id into v_id;
-  insert into conteo_base (conteo_id, producto_id, stock_sistema)
-    select v_id, id, stock_actual from productos where activo;
+
+  if p_continuar_de is not null then
+    select * into v_prev from conteos where id = p_continuar_de;
+    if not found then raise exception 'El conteo a continuar no existe'; end if;
+    if v_prev.estado <> 'cerrado' then raise exception 'Solo se puede continuar un conteo cerrado'; end if;
+  end if;
+
+  if exists (select 1 from conteos where estado = 'abierto') then
+    raise exception 'Ya hay un conteo abierto: cerralo antes de iniciar otro';
+  end if;
+
+  v_nombre := coalesce(
+    nullif(trim(p_nombre), ''),
+    'Conteo ' || to_char(now() at time zone 'America/Argentina/Buenos_Aires', 'DD/MM/YYYY')
+      || ' · ' || upper(substr(v_id::text, 1, 6))
+  );
+
+  insert into conteos (id, nombre, creado_por, continua_de)
+  values (v_id, v_nombre, auth.uid(), p_continuar_de);
+
+  if p_continuar_de is null then
+    insert into conteo_base (conteo_id, producto_id, stock_sistema)
+      select v_id, id, stock_actual from productos where activo;
+  else
+    -- Se conserva el stock de referencia ORIGINAL del conteo que se continúa
+    insert into conteo_base (conteo_id, producto_id, stock_sistema)
+      select v_id, b.producto_id, b.stock_sistema
+      from conteo_base b join productos p on p.id = b.producto_id
+      where b.conteo_id = p_continuar_de
+        and (p.activo or exists (
+          select 1 from conteo_movimientos m
+          where m.conteo_id = p_continuar_de and m.producto_id = b.producto_id));
+    -- Productos dados de alta después
+    insert into conteo_base (conteo_id, producto_id, stock_sistema)
+      select v_id, p.id, p.stock_actual from productos p
+      where p.activo and not exists (
+        select 1 from conteo_base x where x.conteo_id = v_id and x.producto_id = p.id);
+    -- Lo ya contado se arrastra como un movimiento por producto (el total se conserva)
+    insert into conteo_movimientos (id, conteo_id, producto_id, cantidad, usuario_id, nota)
+      select gen_random_uuid(), v_id, m.producto_id, sum(m.cantidad), auth.uid(),
+             'Arrastre de «' || v_prev.nombre || '»'
+      from conteo_movimientos m where m.conteo_id = p_continuar_de
+      group by m.producto_id;
+  end if;
+
   return v_id;
 end $$;
 
@@ -308,7 +357,7 @@ grant execute on function public.crear_producto(text,text,text,text,numeric,nume
 revoke execute on function public.handle_new_user() from authenticated;
 grant execute on function public.is_active() to authenticated;
 grant execute on function public.is_admin() to authenticated;
-grant execute on function public.iniciar_conteo(text) to authenticated;
+grant execute on function public.iniciar_conteo(text, uuid) to authenticated;
 grant execute on function public.alta_rapida(uuid, text, text, text, text) to authenticated;
 grant execute on function public.cerrar_conteo(uuid) to authenticated;
 grant execute on function public.importar_productos(jsonb) to authenticated;

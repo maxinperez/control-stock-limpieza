@@ -94,6 +94,22 @@ describe('Reportes · botón Exportar Excel', () => {
     expect(contenedor.textContent).toMatch(/Conteo cerrado con 1 producto contado\. Ya podés exportar/)
   })
 
+  it('un conteo que continúa a otro muestra de cuál y avisa que se cargue solo este resultado', async () => {
+    const anterior = { id: 'c0', nombre: 'Conteo 18/10/2026 · AAAAAA', estado: 'cerrado' }
+    respuestas.conteos = [{ ...conteo, continua_de: 'c0' }, anterior]
+    respuestas.conteo_resumen = [fila({ movimientos: 1, contado: 3 })]
+    await montar()
+    expect(contenedor.textContent).toMatch(/Continúa de «Conteo 18\/10\/2026 · AAAAAA»/)
+    expect(contenedor.textContent).toMatch(/solo este resultado/)
+  })
+
+  it('un conteo que no continúa a otro no muestra ese aviso', async () => {
+    respuestas.conteos = [conteo]
+    respuestas.conteo_resumen = [fila({ movimientos: 1, contado: 3 })]
+    await montar()
+    expect(contenedor.textContent).not.toMatch(/Continúa de/)
+  })
+
   it('con un producto contado: botón habilitado y genera el archivo', async () => {
     respuestas.conteos = [conteo]
     respuestas.conteo_resumen = [fila({ movimientos: 2, contado: 4, diferencia: -6 })]
