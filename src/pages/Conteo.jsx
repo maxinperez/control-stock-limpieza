@@ -17,6 +17,8 @@ export default function Conteo({ profile, onChange }) {
   const [rows, setRows] = useState([])
   const [ultimo, setUltimo] = useState(null) // { conteo, rows } del último cerrado, para revisar
   const [tick, setTick] = useState(0)
+  const [selId, setSelId] = useState(null) // producto elegido cuando hay varios
+  const [cerrando, setCerrando] = useState(false)
   const timer = useRef()
 
   const load = useCallback(async () => {
@@ -94,44 +96,95 @@ export default function Conteo({ profile, onChange }) {
     )
   }
 
+  const sel = view.find((r) => r.producto_id === selId) ?? view[0]
+
   return (
     <>
       {avisoRechazadas}
-      {view.map((r) => <ProductoEnConteo key={r.producto_id} row={r} onCargar={(delta) => cargar(r, delta)} />)}
-      {admin && <CerrarConteo conteo={conteo} view={view} pendientes={pendientes} onCerrado={load} />}
+      <div className="row conteo-cabecera">
+        <span className="muted grow">{view.length > 1 ? `Conteo de ${view.length} productos` : 'Conteo abierto'}</span>
+        {/* Arriba y chico, lejos del pulgar: cerrar se hace pocas veces y tiene confirmación */}
+        {admin && <button className="link danger" onClick={() => setCerrando(true)}>Cerrar conteo</button>}
+      </div>
+      {view.length > 1 && (
+        <div className="selector" role="tablist" aria-label="Producto a contar">
+          {view.map((r) => (
+            <button key={r.producto_id} role="tab" aria-selected={r === sel} className={r === sel ? 'on' : ''}
+              onClick={() => setSelId(r.producto_id)}>
+              <span>{r.nombre}</span>
+              <b>{num(r.contado)}</b>
+            </button>
+          ))}
+        </div>
+      )}
+      {sel && <Contador key={sel.producto_id} row={sel} onCargar={(delta) => cargar(sel, delta)} />}
+      {cerrando && (
+        <CerrarConteo conteo={conteo} view={view} pendientes={pendientes}
+          onCancelar={() => setCerrando(false)}
+          onCerrado={() => { setCerrando(false); load() }} />
+      )}
     </>
   )
 }
 
-function ProductoEnConteo({ row, onCargar }) {
+const vibrar = () => { try { navigator.vibrate?.(15) } catch { /* no disponible */ } }
+const MAX_DIGITOS = 5
+
+// Pensado para una mano: total arriba, y abajo (al alcance del pulgar) la cantidad,
+// un teclado propio (no aparece el del teléfono) y "Sumar" grande como acción principal.
+function Contador({ row, onCargar }) {
   const [n, setN] = useState('')
   const [err, setErr] = useState('')
+  const [ultima, setUltima] = useState(null)
+
+  const tecla = (d) => { setErr(''); setN((prev) => (prev + d).replace(/^0+(?=\d)/, '').slice(0, MAX_DIGITOS)) }
+  const borrar = () => { setErr(''); setN((prev) => prev.slice(0, -1)) }
+  const limpiar = () => { setErr(''); setN('') }
 
   function aplicar(tipo) {
     const r = validarMovimiento(row.contado, n, tipo)
     if (!r.ok) { setErr(r.error); return }
-    setErr(''); setN('')
+    setErr(''); setN(''); setUltima(r.delta)
+    vibrar()
     onCargar(r.delta)
   }
 
   return (
-    <div className="card stack">
-      <span className="muted">Contando</span>
-      <b style={{ fontSize: 24 }}>{row.nombre}</b>
-      <div className="big">Total: <b style={{ fontSize: 40 }}>{num(row.contado)}</b></div>
-      <input inputMode="numeric" className="big" placeholder="Cantidad" value={n}
-        onChange={(e) => { setN(e.target.value); setErr('') }} />
-      <div className="row">
-        {[1, 5, 10].map((k) => (
-          <button key={k} className="grow" onClick={() => setN(String((Number.parseInt(n, 10) || 0) + k))}>+{k}</button>
-        ))}
+    <>
+      <div className="card total">
+        <div className="producto-nombre">{row.nombre}</div>
+        <div className="total-numero" aria-label="Total">{num(row.contado)}</div>
+        <div className="muted">
+          {ultima == null ? 'Total contado' : `Última carga: ${ultima > 0 ? '+' : '−'}${Math.abs(ultima)}`}
+        </div>
       </div>
-      {err && <div className="err">{err}</div>}
-      <div className="row">
-        <button className="grow" onClick={() => aplicar('restar')}>− Restar</button>
-        <button className="grow primary" onClick={() => aplicar('sumar')}>+ Sumar</button>
+      <div className="espacio-panel" />
+      <div className="panel">
+        <div className="panel-in">
+          {/* En pantallas bajas la tarjeta de arriba queda tapada: el total se muestra acá */}
+          <div className="panel-total">
+            <span>{row.nombre}</span>
+            <b aria-label="Total">{num(row.contado)}</b>
+          </div>
+          <div className="pantalla" aria-label="Cantidad" aria-live="polite">
+            <span className={n ? '' : 'vacio'}>{n || '0'}</span>
+          </div>
+          {err && <div className="err centro" role="alert">{err}</div>}
+          <div className="teclado" aria-label="Teclado">
+            {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => (
+              <button key={d} type="button" onClick={() => tecla(d)}>{d}</button>
+            ))}
+            <button type="button" aria-label="Borrar todo" onClick={limpiar}>C</button>
+            <button type="button" onClick={() => tecla('0')}>0</button>
+            <button type="button" aria-label="Borrar" onClick={borrar}>⌫</button>
+          </div>
+          <div className="acciones">
+            <button type="button" className="restar" disabled={!n} onClick={() => aplicar('restar')}>− Restar</button>
+            <button type="button" className="primary sumar" disabled={!n} onClick={() => aplicar('sumar')}>+ Sumar</button>
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -187,7 +240,7 @@ function AbrirConteo({ hayAnterior, onAbierto }) {
       {varios && <span className="muted">Contar de a un producto ayuda a evitar errores.</span>}
       {hayAnterior && <span className="muted">Al abrir un conteo nuevo, el anterior deja de mostrarse.</span>}
       {err && <div className="err">{err}</div>}
-      <button className="primary" disabled={busy}>Abrir conteo</button>
+      <button className="primary boton-grande" disabled={busy}>Abrir conteo</button>
     </form>
   )
 }
@@ -208,8 +261,7 @@ function UltimoConteo({ ultimo }) {
   )
 }
 
-function CerrarConteo({ conteo, view, pendientes, onCerrado }) {
-  const [confirmando, setConfirmando] = useState(false)
+function CerrarConteo({ conteo, view, pendientes, onCerrado, onCancelar }) {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -218,24 +270,22 @@ function CerrarConteo({ conteo, view, pendientes, onCerrado }) {
     const { error } = await supabase.rpc('cerrar_conteo', { p_conteo: conteo.id })
     setBusy(false)
     if (error) { setErr(error.message); return }
-    setConfirmando(false)
     onCerrado()
   }
 
-  if (!confirmando) {
-    return <button className="danger" style={{ width: '100%' }} onClick={() => setConfirmando(true)}>Cerrar conteo</button>
-  }
   return (
-    <div className="card stack">
-      <b>¿Cerrar el conteo?</b>
-      {conCantidad(view).length === 0
-        ? <span className="err">No se contó nada (el total es 0): se va a cerrar como un conteo no realizado.</span>
-        : conCantidad(view).map((r) => <span key={r.producto_id}>{r.nombre}: <b>{num(r.contado)}</b></span>)}
-      {pendientes > 0 && <span className="err">Hay {pendientes} carga(s) de este teléfono sin enviar todavía.</span>}
-      <span className="muted">Ya no se podrán sumar ni restar cantidades. El resultado queda visible hasta que abras otro conteo.</span>
-      {err && <div className="err">{err}</div>}
-      <button className="danger" disabled={busy} onClick={cerrar}>Sí, cerrar conteo</button>
-      <button disabled={busy} onClick={() => setConfirmando(false)}>No, volver</button>
+    <div className="modal" onClick={onCancelar}>
+      <div className="stack" role="dialog" aria-label="Cerrar conteo" onClick={(e) => e.stopPropagation()}>
+        <b>¿Cerrar el conteo?</b>
+        {conCantidad(view).length === 0
+          ? <span className="err">No se contó nada (el total es 0): se va a cerrar como un conteo no realizado.</span>
+          : conCantidad(view).map((r) => <span key={r.producto_id}>{r.nombre}: <b>{num(r.contado)}</b></span>)}
+        {pendientes > 0 && <span className="err">Hay {pendientes} carga(s) de este teléfono sin enviar todavía.</span>}
+        <span className="muted">Ya no se podrán sumar ni restar cantidades. El resultado queda visible hasta que abras otro conteo.</span>
+        {err && <div className="err">{err}</div>}
+        <button className="danger boton-grande" disabled={busy} onClick={cerrar}>Sí, cerrar conteo</button>
+        <button className="boton-grande" disabled={busy} onClick={onCancelar}>No, volver</button>
+      </div>
     </div>
   )
 }

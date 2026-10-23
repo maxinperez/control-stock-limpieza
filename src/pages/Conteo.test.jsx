@@ -181,60 +181,102 @@ describe('Conteo · sin conteo abierto', () => {
   })
 })
 
-describe('Conteo · con un conteo abierto', () => {
-  // Clases: sumar entero · restar ≤ total · restar > total · decimal · vacío · atajos · rol · cierre · cargas rechazadas
+describe('Conteo · con un conteo abierto (teclado para una mano)', () => {
+  // Clases de teclado: dígitos · cero a la izquierda · borrar uno · borrar todo · tope de 5 dígitos · sin coma decimal
+  // Clases de acción: sumar · restar ≤ total · restar > total · sin cantidad · rol · cierre (cancelar / confirmar / total 0)
+  //                   · varios productos · carga rechazada · confirmación por vibración
+  const teclear = async (digitos) => {
+    for (const d of digitos) {
+      const b = [...contenedor.querySelectorAll('.teclado button')].find((x) => x.textContent === d)
+      await act(async () => b.click())
+    }
+  }
+  const tecla = async (label) => act(async () => contenedor.querySelector(`.teclado [aria-label="${label}"]`).click())
+  const cantidad = () => contenedor.querySelector('[aria-label="Cantidad"]').textContent
+  const total = () => contenedor.querySelector('.total [aria-label="Total"]').textContent
+  const nota = () => contenedor.querySelector('.total .muted').textContent
+
   beforeEach(() => {
     resp.abierto = abierto
     resp.resumen.c1 = [fila({ contado: 15, movimientos: 2 })]
   })
 
-  it('muestra el producto y el total parcial', async () => {
+  it('muestra el producto y el total en grande, con la cantidad en 0', async () => {
     await montar()
-    expect(contenedor.textContent).toMatch(/esp rosa/)
-    expect(contenedor.textContent).toMatch(/Total: 15/)
+    expect(contenedor.querySelector('.producto-nombre').textContent).toBe('esp rosa')
+    expect(total()).toBe('15')
+    expect(cantidad()).toBe('0')
   })
 
-  it('sumar 20 envía +20', async () => {
+  it('sin cantidad, Sumar y Restar están deshabilitados', async () => {
     await montar()
-    await escribir(input('Cantidad'), '20')
+    expect(boton('Sumar').disabled).toBe(true)
+    expect(boton('Restar').disabled).toBe(true)
+  })
+
+  it('teclear 2 y 0 y Sumar envía +20, limpia la cantidad y lo confirma', async () => {
+    await montar()
+    await teclear('20')
+    expect(cantidad()).toBe('20')
     await click('Sumar')
     expect(cargasEnviadas()).toEqual([20])
+    expect(cantidad()).toBe('0')
+    expect(nota()).toBe('Última carga: +20')
+  })
+
+  it('al sumar, el teléfono vibra (si puede) como confirmación', async () => {
+    const vibrate = vi.fn()
+    Object.defineProperty(navigator, 'vibrate', { value: vibrate, configurable: true })
+    await montar()
+    await teclear('3')
+    await click('Sumar')
+    expect(vibrate).toHaveBeenCalled()
+    delete navigator.vibrate
   })
 
   it('restar 5 (menos que el total) envía −5', async () => {
     await montar()
-    await escribir(input('Cantidad'), '5')
+    await teclear('5')
     await click('Restar')
     expect(cargasEnviadas()).toEqual([-5])
+    expect(nota()).toBe('Última carga: −5')
   })
 
-  it('restar más que el total no envía nada y avisa', async () => {
+  it('restar más que el total no envía nada, avisa y conserva la cantidad', async () => {
     await montar()
-    await escribir(input('Cantidad'), '20')
+    await teclear('20')
     await click('Restar')
     expect(mockUpsert).not.toHaveBeenCalled()
     expect(contenedor.textContent).toMatch(/No podés restar más de lo contado \(15\)/)
+    expect(cantidad()).toBe('20')
   })
 
-  it('un decimal no se envía', async () => {
+  it('un cero a la izquierda no queda (0 y 7 = 7)', async () => {
     await montar()
-    await escribir(input('Cantidad'), '2,5')
-    await click('Sumar')
-    expect(mockUpsert).not.toHaveBeenCalled()
-    expect(contenedor.textContent).toMatch(/enteros/)
+    await teclear('07')
+    expect(cantidad()).toBe('7')
   })
 
-  it('sin cantidad no se envía', async () => {
+  it('⌫ borra el último dígito y C borra todo', async () => {
     await montar()
-    await click('Sumar')
-    expect(mockUpsert).not.toHaveBeenCalled()
+    await teclear('123')
+    await tecla('Borrar')
+    expect(cantidad()).toBe('12')
+    await tecla('Borrar todo')
+    expect(cantidad()).toBe('0')
   })
 
-  it('los atajos acumulan en el campo (+5 +10 = 15)', async () => {
+  it('la cantidad tiene un tope de 5 dígitos', async () => {
     await montar()
-    await click('+5')
-    await click('+10')
-    expect(input('Cantidad').value).toBe('15')
+    await teclear('1234567')
+    expect(cantidad()).toBe('12345')
+  })
+
+  it('no hay tecla de coma ni punto: no se pueden cargar decimales', async () => {
+    await montar()
+    const teclas = [...contenedor.querySelectorAll('.teclado button')].map((b) => b.textContent)
+    expect(teclas).not.toContain(',')
+    expect(teclas).not.toContain('.')
   })
 
   it('un contador puede sumar pero no ve "Cerrar conteo"', async () => {
@@ -243,12 +285,19 @@ describe('Conteo · con un conteo abierto', () => {
     expect(boton('Cerrar conteo')).toBeUndefined()
   })
 
-  it('el admin cierra con confirmación, que muestra el total', async () => {
+  it('cerrar pide confirmación; "No, volver" la cancela sin cerrar', async () => {
     await montar()
     await click('Cerrar conteo')
-    expect(supabase.rpc).not.toHaveBeenCalled()
-    expect(contenedor.textContent).toMatch(/¿Cerrar el conteo\?/)
+    expect(contenedor.querySelector('[role="dialog"]')).not.toBeNull()
     expect(contenedor.textContent).toMatch(/esp rosa: 15/)
+    await click('No, volver')
+    expect(contenedor.querySelector('[role="dialog"]')).toBeNull()
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('confirmar el cierre llama a cerrar_conteo', async () => {
+    await montar()
+    await click('Cerrar conteo')
     await click('Sí, cerrar conteo')
     expect(supabase.rpc).toHaveBeenCalledWith('cerrar_conteo', { p_conteo: 'c1' })
   })
@@ -261,24 +310,39 @@ describe('Conteo · con un conteo abierto', () => {
     expect(contenedor.textContent).not.toMatch(/esp rosa: 0/)
   })
 
-  it('con 2 productos: una tarjeta por producto, cada una suma al suyo y el cierre lista ambos', async () => {
+  it('con 2 productos: se elige cuál contar arriba y Sumar va a ese', async () => {
     resp.resumen.c1 = [fila({ contado: 15, movimientos: 2 }), fila({ producto_id: 'p2', nombre: 'rej azul', contado: 4, movimientos: 1 })]
     await montar()
-    const cantidades = [...contenedor.querySelectorAll('input[placeholder="Cantidad"]')]
-    expect(cantidades).toHaveLength(2)
-    await escribir(cantidades[1], '3')
-    const sumar = [...contenedor.querySelectorAll('button')].filter((b) => b.textContent.includes('Sumar'))
-    await act(async () => sumar[1].click()); await act(async () => {})
+    const tarjetas = [...contenedor.querySelectorAll('.selector button')]
+    expect(tarjetas.map((t) => t.textContent)).toEqual(['esp rosa15', 'rej azul4'])
+    expect(tarjetas[0].getAttribute('aria-selected')).toBe('true')
+    await act(async () => tarjetas[1].click())
+    expect(contenedor.querySelector('.producto-nombre').textContent).toBe('rej azul')
+    await teclear('3')
+    await click('Sumar')
     expect(mockUpsert.mock.calls[0][0][0]).toMatchObject({ producto_id: 'p2', cantidad: 3 })
     await click('Cerrar conteo')
     expect(contenedor.textContent).toMatch(/esp rosa: 15/)
     expect(contenedor.textContent).toMatch(/rej azul: 4/)
   })
 
+  it('con un solo producto no aparece el selector', async () => {
+    await montar()
+    expect(contenedor.querySelector('.selector')).toBeNull()
+  })
+
+  it('cambiar de producto descarta lo tecleado para no sumárselo al otro', async () => {
+    resp.resumen.c1 = [fila({ contado: 15, movimientos: 2 }), fila({ producto_id: 'p2', nombre: 'rej azul', contado: 4, movimientos: 1 })]
+    await montar()
+    await teclear('9')
+    await act(async () => contenedor.querySelectorAll('.selector button')[1].click())
+    expect(cantidad()).toBe('0')
+  })
+
   it('si la base rechaza una carga (p. ej. otro restó antes), se avisa y se puede descartar el aviso', async () => {
     resp.upsert = { error: { code: 'P0001', message: 'No se puede restar más de lo contado (3)' } }
     await montar()
-    await escribir(input('Cantidad'), '5')
+    await teclear('5')
     await click('Restar')
     expect(contenedor.textContent).toMatch(/1 carga no se guardó/)
     await click('Entendido')
